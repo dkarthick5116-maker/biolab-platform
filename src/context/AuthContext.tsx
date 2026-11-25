@@ -7,6 +7,7 @@ import {
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
 import { UserProfile } from '../types';
+import { Dna, Loader2 } from 'lucide-react';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -44,7 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUserProfile(defaultProfile);
       }
     } catch (err) {
-      console.error('Failed to fetch/initialize user profile:', err);
+      console.warn('Firestore profile fetch skipped or delayed:', err);
     }
   };
 
@@ -55,27 +56,90 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      if (user) {
-        await fetchProfile(user.uid, user.email);
-      } else {
-        setUserProfile(null);
-      }
+    // Safety fallback: prevent hanging indefinitely
+    const safetyTimer = setTimeout(() => {
       setLoading(false);
-    });
+    }, 2500);
 
-    return () => unsubscribe();
+    try {
+      const unsubscribe = onAuthStateChanged(
+        auth,
+        async (user) => {
+          clearTimeout(safetyTimer);
+          setCurrentUser(user);
+          if (user) {
+            await fetchProfile(user.uid, user.email);
+          } else {
+            setUserProfile(null);
+          }
+          setLoading(false);
+        },
+        (error) => {
+          console.warn('Firebase auth listener error:', error);
+          clearTimeout(safetyTimer);
+          setLoading(false);
+        }
+      );
+
+      return () => {
+        clearTimeout(safetyTimer);
+        unsubscribe();
+      };
+    } catch (err) {
+      console.warn('Firebase auth init error:', err);
+      clearTimeout(safetyTimer);
+      setLoading(false);
+    }
   }, []);
 
   const logout = async () => {
-    await fbSignOut(auth);
+    try {
+      await fbSignOut(auth);
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
     setUserProfile(null);
   };
 
+  if (loading) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--bg-base)',
+          color: 'var(--text-main)',
+          gap: '16px'
+        }}
+      >
+        <div
+          style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-violet) 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#070B19'
+          }}
+        >
+          <Dna size={28} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+          <Loader2 size={16} className="animate-spin" />
+          <span>Connecting BioLab Core...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AuthContext.Provider value={{ currentUser, userProfile, loading, logout, refreshProfile }}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 };
