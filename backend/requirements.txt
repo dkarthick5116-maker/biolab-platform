@@ -1,0 +1,7 @@
+
+fastapi
+uvicorn[standard]
+biopython
+firebase-admin
+python-dotenv
+  
