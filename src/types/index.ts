@@ -1,0 +1,40 @@
+export type Theme = 'dark' | 'light';
+
+export type ActivePage = 
+  | 'landing'
+  | 'dashboard'
+  | 'dna'
+  | 'rna'
+  | 'protein'
+  | 'fasta'
+  | 'alignment'
+  | 'database'
+  | 'blast'
+  | 'visualization'
+  | 'workspace'
+  | 'learning'
+  | 'profile'
+  | 'admin';
+
+export interface NavItem {
+  id: ActivePage;
+  label: string;
+  iconName: string;
+  badge?: string;
+  phase: number;
+}
+
+export interface MetricSummary {
+  title: string;
+  value: string;
+  delta: string;
+  status: 'positive' | 'neutral' | 'accent';
+}
+
+export interface LabActivity {
+  id: string;
+  type: 'DNA' | 'RNA' | 'PROTEIN' | 'BLAST' | 'ALIGNMENT';
+  title: string;
+  timestamp: string;
+  status: 'Completed' | 'Queued' | 'Failed';
+}
