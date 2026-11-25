@@ -1,18 +1,29 @@
 import React, { useState } from 'react';
 import { ActivePage } from './types';
 import { ThemeProvider } from './context/ThemeContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
 import { Footer } from './components/layout/Footer';
 import { LandingPage } from './pages/LandingPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { LoginPage } from './pages/LoginPage';
+import { RegisterPage } from './pages/RegisterPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { PlaceholderModule } from './pages/PlaceholderModule';
 
 export const AppContent: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<ActivePage>('landing');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const { currentUser } = useAuth();
 
   const handleNavigate = (page: ActivePage) => {
+    const protectedPages: ActivePage[] = ['workspace', 'profile'];
+    if (protectedPages.includes(page) && !currentUser) {
+      setCurrentPage('login');
+      return;
+    }
+
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -21,8 +32,14 @@ export const AppContent: React.FC = () => {
     switch (currentPage) {
       case 'landing':
         return <LandingPage onNavigate={handleNavigate} />;
+      case 'login':
+        return <LoginPage onNavigate={handleNavigate} />;
+      case 'register':
+        return <RegisterPage onNavigate={handleNavigate} />;
       case 'dashboard':
         return <DashboardPage onNavigate={handleNavigate} />;
+      case 'profile':
+        return currentUser ? <ProfilePage onNavigate={handleNavigate} /> : <LoginPage onNavigate={handleNavigate} />;
       default:
         return <PlaceholderModule pageId={currentPage} onNavigate={handleNavigate} />;
     }
@@ -67,7 +84,9 @@ export const AppContent: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <ThemeProvider>
-      <AppContent />
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </ThemeProvider>
   );
 };
