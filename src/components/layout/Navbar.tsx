@@ -1,7 +1,8 @@
 import React from 'react';
-import { Dna, Menu, X, ArrowRight, Home } from 'lucide-react';
+import { Dna, Menu, X, ArrowRight, Home, User, LogIn } from 'lucide-react';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { ActivePage } from '../../types';
+import { useAuth } from '../../context/AuthContext';
 
 interface NavbarProps {
   currentPage: ActivePage;
@@ -16,6 +17,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isSidebarOpen,
   onToggleSidebar
 }) => {
+  const { currentUser, userProfile } = useAuth();
+
   return (
     <header
       className="glass-panel"
@@ -78,13 +81,32 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <ThemeToggle />
+
+        {currentUser ? (
+          <button
+            className="btn-secondary"
+            onClick={() => onNavigate('profile')}
+            style={{ fontSize: '0.82rem', padding: '6px 12px' }}
+          >
+            <User size={15} />
+            <span>{userProfile?.displayName ? userProfile.displayName.split(' ')[0] : 'Profile'}</span>
+          </button>
+        ) : (
+          <button
+            className="btn-secondary"
+            onClick={() => onNavigate('login')}
+            style={{ fontSize: '0.82rem', padding: '6px 12px' }}
+          >
+            <LogIn size={15} /> Sign In
+          </button>
+        )}
 
         {currentPage === 'landing' ? (
           <button
             className="btn-primary"
-            onClick={() => onNavigate('dashboard')}
+            onClick={() => onNavigate(currentUser ? 'dashboard' : 'login')}
             style={{ fontSize: '0.85rem', padding: '8px 14px' }}
           >
             Launch Lab <ArrowRight size={16} />
@@ -93,7 +115,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             className="btn-secondary"
             onClick={() => onNavigate('landing')}
-            style={{ fontSize: '0.85rem', padding: '8px 14px' }}
+            style={{ fontSize: '0.85rem', padding: '8px 12px' }}
           >
             <Home size={16} />
           </button>
