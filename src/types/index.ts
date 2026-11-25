@@ -1,7 +1,21 @@
 export type Theme = 'dark' | 'light';
 
+export type UserRole = 'student' | 'researcher' | 'educator' | 'admin';
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  institution?: string;
+  role: UserRole;
+  createdAt: string;
+  analysesRun: number;
+}
+
 export type ActivePage = 
   | 'landing'
+  | 'login'
+  | 'register'
   | 'dashboard'
   | 'dna'
   | 'rna'
@@ -22,6 +36,7 @@ export interface NavItem {
   iconName: string;
   badge?: string;
   phase: number;
+  requiresAuth?: boolean;
 }
 
 export interface MetricSummary {
