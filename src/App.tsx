@@ -10,6 +10,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { DnaAnalyzerPage } from './pages/DnaAnalyzerPage';
 import { PlaceholderModule } from './pages/PlaceholderModule';
 
 export const AppContent: React.FC = () => {
@@ -40,6 +41,8 @@ export const AppContent: React.FC = () => {
         return <DashboardPage onNavigate={handleNavigate} />;
       case 'profile':
         return currentUser ? <ProfilePage onNavigate={handleNavigate} /> : <LoginPage onNavigate={handleNavigate} />;
+      case 'dna':
+        return <DnaAnalyzerPage onNavigate={handleNavigate} />;
       default:
         return <PlaceholderModule pageId={currentPage} onNavigate={handleNavigate} />;
     }
