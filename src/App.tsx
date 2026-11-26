@@ -11,6 +11,7 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { DnaAnalyzerPage } from './pages/DnaAnalyzerPage';
+import { RnaAnalyzerPage } from './pages/RnaAnalyzerPage';
 import { PlaceholderModule } from './pages/PlaceholderModule';
 
 export const AppContent: React.FC = () => {
@@ -40,9 +41,15 @@ export const AppContent: React.FC = () => {
       case 'dashboard':
         return <DashboardPage onNavigate={handleNavigate} />;
       case 'profile':
-        return currentUser ? <ProfilePage onNavigate={handleNavigate} /> : <LoginPage onNavigate={handleNavigate} />;
+        return currentUser ? (
+          <ProfilePage onNavigate={handleNavigate} />
+        ) : (
+          <LoginPage onNavigate={handleNavigate} />
+        );
       case 'dna':
         return <DnaAnalyzerPage onNavigate={handleNavigate} />;
+      case 'rna':
+        return <RnaAnalyzerPage onNavigate={handleNavigate} />;
       default:
         return <PlaceholderModule pageId={currentPage} onNavigate={handleNavigate} />;
     }
@@ -54,7 +61,7 @@ export const AppContent: React.FC = () => {
         currentPage={currentPage}
         onNavigate={handleNavigate}
         isSidebarOpen={isSidebarOpen}
-        onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
+        onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
       />
 
       <div style={{ display: 'flex', flex: 1 }}>
@@ -72,7 +79,10 @@ export const AppContent: React.FC = () => {
             flex: 1,
             width: '100%',
             transition: 'margin-left var(--transition-smooth)',
-            marginLeft: currentPage !== 'landing' && window.innerWidth >= 1024 ? 'var(--sidebar-width)' : 0
+            marginLeft:
+              currentPage !== 'landing' && window.innerWidth >= 1024
+                ? 'var(--sidebar-width)'
+                : 0
           }}
         >
           {renderActivePage()}
