@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ActivePage } from '../types';
-import { ArrowLeft, Dna, Play, RotateCcw, AlertCircle, CheckCircle2, Copy } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { saveAnalysisRun } from '../services/historyService';
+import { ArrowLeft, Dna, Play, RotateCcw, AlertCircle, CheckCircle2, Copy, Bookmark, Check } from 'lucide-react';
 
 interface RnaAnalyzerPageProps {
   onNavigate: (page: ActivePage) => void;
@@ -23,8 +25,11 @@ interface RnaAnalysisResult {
 }
 
 export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) => {
+  const { currentUser, refreshProfile } = useAuth();
   const [sequence, setSequence] = useState('AUGCGUACGUAGCUAGCUAG');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RnaAnalysisResult | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -38,6 +43,7 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
     if (!sequence.trim() || loading) return;
 
     setError(null);
+    setSavedSuccess(false);
     setLoading(true);
 
     try {
@@ -66,6 +72,31 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
       setError(err.message || 'Error communicating with Biopython backend.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveToNotebook = async () => {
+    if (!currentUser || !result || saving || savedSuccess) return;
+
+    setSaving(true);
+    try {
+      await saveAnalysisRun(currentUser.uid, {
+        module: 'RNA',
+        sequence: result.sequence,
+        length: result.length,
+        gcContent: result.gc_content,
+        secondaryMetric: {
+          label: 'AU Content',
+          value: result.au_content
+        },
+        summary: `RNA ${result.length} nt | GC: ${result.gc_content}% | Peptide: ${result.protein_translation.substring(0, 15)}...`
+      });
+      setSavedSuccess(true);
+      await refreshProfile();
+    } catch (err: any) {
+      setError('Failed to record run in notebook.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -180,6 +211,7 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
                 setSequence('AUGCGUACGUAGCUAGCUAG');
                 setResult(null);
                 setError(null);
+                setSavedSuccess(false);
               }}
               style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
             >
@@ -192,6 +224,55 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
       {/* Results View */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div
+            className="glass-panel"
+            style={{
+              padding: '14px 20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}
+          >
+            <div>
+              <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                Analysis Complete
+              </span>
+              <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                Biopython transcript operations verified.
+              </p>
+            </div>
+            {currentUser ? (
+              <button
+                type="button"
+                onClick={handleSaveToNotebook}
+                disabled={saving || savedSuccess}
+                className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '0.82rem',
+                  borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
+                  color: savedSuccess ? 'var(--accent-emerald)' : undefined
+                }}
+              >
+                {savedSuccess ? <Check size={15} /> : <Bookmark size={15} />}
+                {savedSuccess ? 'Saved to Lab Notebook' : saving ? 'Saving...' : 'Save to Lab Notebook'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onNavigate('login')}
+                className="btn-secondary"
+                style={{ fontSize: '0.8rem' }}
+              >
+                Sign In to Save Run
+              </button>
+            )}
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Sequence Length</span>
