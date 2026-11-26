@@ -2,13 +2,26 @@ import React, { useState } from 'react';
 import { ActivePage } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { saveAnalysisRun } from '../services/historyService';
-import { ArrowLeft, Dna, Play, RotateCcw, AlertCircle, CheckCircle2, Copy, Bookmark, Check } from 'lucide-react';
+import { exportAsFasta, exportAsJson } from '../services/exportService';
+import { 
+  ArrowLeft, 
+  Dna, 
+  Play, 
+  RotateCcw, 
+  AlertCircle, 
+  CheckCircle2, 
+  Copy, 
+  Bookmark, 
+  Check, 
+  Download, 
+  FileDown 
+} from 'lucide-react';
 
 interface DnaAnalyzerPageProps {
   onNavigate: (page: ActivePage) => void;
 }
 
-interface AnalysisResult {
+interface DnaAnalysisResult {
   sequence: string;
   length: number;
   counts: {
@@ -30,7 +43,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [result, setResult] = useState<DnaAnalysisResult | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const handleAnalyze = async (e?: React.MouseEvent) => {
@@ -57,7 +70,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
 
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
-        throw new Error(`API error (${response.status}). Check Vercel function logs.`);
+        throw new Error(`API error (${response.status}). Check Vercel logs.`);
       }
 
       const data = await response.json();
@@ -88,12 +101,14 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
           label: 'AT Content',
           value: result.at_content
         },
-        summary: `DNA ${result.length} bp | GC: ${result.gc_content}% | Transcribed: ${result.rna_transcript.substring(0, 15)}...`
+        summary: `DNA ${result.length} bp | GC: ${result.gc_content}% | Transcript: ${result.rna_transcript.substring(0, 15)}...`
       });
       setSavedSuccess(true);
-      await refreshProfile();
+      if (refreshProfile) {
+        await refreshProfile();
+      }
     } catch (err: any) {
-      setError('Failed to record run in notebook.');
+      setError(err?.message || 'Failed to record run in notebook.');
     } finally {
       setSaving(false);
     }
@@ -116,7 +131,6 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
         <ArrowLeft size={16} /> Back to Lab Dashboard
       </button>
 
-      {/* Header Panel */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div
@@ -136,7 +150,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
           <div>
             <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0 }}>DNA Sequence Analyzer</h1>
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-              Biopython-driven nucleotide frequency, GC stoichiometry, and transcription engine.
+              Biopython nucleotide distribution, GC stoichiometry, and transcript synthesis.
             </p>
           </div>
         </div>
@@ -161,7 +175,6 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
         </div>
       )}
 
-      {/* Input Section */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -220,10 +233,8 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
         </div>
       </div>
 
-      {/* Results View */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Persistence action bar */}
           <div
             className="glass-panel"
             style={{
@@ -232,7 +243,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
               justifyContent: 'space-between',
               alignItems: 'center',
               flexWrap: 'wrap',
-              gap: '10px'
+              gap: '12px'
             }}
           >
             <div>
@@ -243,34 +254,77 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
                 Biopython sequence calculation verified.
               </p>
             </div>
-            {currentUser ? (
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               <button
                 type="button"
-                onClick={handleSaveToNotebook}
-                disabled={saving || savedSuccess}
-                className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '0.82rem',
-                  borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
-                  color: savedSuccess ? 'var(--accent-emerald)' : undefined
-                }}
-              >
-                {savedSuccess ? <Check size={15} /> : <Bookmark size={15} />}
-                {savedSuccess ? 'Saved to Lab Notebook' : saving ? 'Saving...' : 'Save to Lab Notebook'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => onNavigate('login')}
                 className="btn-secondary"
-                style={{ fontSize: '0.8rem' }}
+                onClick={() =>
+                  exportAsFasta({
+                    module: 'DNA',
+                    sequence: result.sequence,
+                    length: result.length,
+                    gc_content: result.gc_content,
+                    at_or_au_content: result.at_content,
+                    counts: result.counts,
+                    reverse_complement: result.reverse_complement,
+                    derived_sequence: result.rna_transcript
+                  })
+                }
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', padding: '6px 12px' }}
               >
-                Sign In to Save Run
+                <Download size={14} /> Export FASTA
               </button>
-            )}
+
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  exportAsJson({
+                    module: 'DNA',
+                    sequence: result.sequence,
+                    length: result.length,
+                    gc_content: result.gc_content,
+                    at_or_au_content: result.at_content,
+                    counts: result.counts,
+                    reverse_complement: result.reverse_complement,
+                    derived_sequence: result.rna_transcript
+                  })
+                }
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', padding: '6px 12px' }}
+              >
+                <FileDown size={14} /> Export JSON
+              </button>
+
+              {currentUser ? (
+                <button
+                  type="button"
+                  onClick={handleSaveToNotebook}
+                  disabled={saving || savedSuccess}
+                  className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.8rem',
+                    borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
+                    color: savedSuccess ? 'var(--accent-emerald)' : undefined
+                  }}
+                >
+                  {savedSuccess ? <Check size={14} /> : <Bookmark size={14} />}
+                  {savedSuccess ? 'Saved to Notebook' : saving ? 'Saving...' : 'Save to Notebook'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('login')}
+                  className="btn-secondary"
+                  style={{ fontSize: '0.8rem' }}
+                >
+                  Sign In to Save
+                </button>
+              )}
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
@@ -360,4 +414,4 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
     </div>
   );
 };
-    
+  
