@@ -2,7 +2,20 @@ import React, { useState } from 'react';
 import { ActivePage } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { saveAnalysisRun } from '../services/historyService';
-import { ArrowLeft, Dna, Play, RotateCcw, AlertCircle, CheckCircle2, Copy, Bookmark, Check } from 'lucide-react';
+import { exportAsFasta, exportAsJson } from '../services/exportService';
+import { 
+  ArrowLeft, 
+  Dna, 
+  Play, 
+  RotateCcw, 
+  AlertCircle, 
+  CheckCircle2, 
+  Copy, 
+  Bookmark, 
+  Check, 
+  Download, 
+  FileDown 
+} from 'lucide-react';
 
 interface RnaAnalyzerPageProps {
   onNavigate: (page: ActivePage) => void;
@@ -92,9 +105,11 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
         summary: `RNA ${result.length} nt | GC: ${result.gc_content}% | Peptide: ${result.protein_translation.substring(0, 15)}...`
       });
       setSavedSuccess(true);
-      await refreshProfile();
+      if (refreshProfile) {
+        await refreshProfile();
+      }
     } catch (err: any) {
-      setError('Failed to record run in notebook.');
+      setError(err?.message || 'Failed to record run in notebook.');
     } finally {
       setSaving(false);
     }
@@ -117,7 +132,6 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
         <ArrowLeft size={16} /> Back to Lab Dashboard
       </button>
 
-      {/* Header Panel */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div
@@ -162,7 +176,6 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
         </div>
       )}
 
-      {/* Input Section */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -221,7 +234,6 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
         </div>
       </div>
 
-      {/* Results View */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div
@@ -232,7 +244,7 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
               justifyContent: 'space-between',
               alignItems: 'center',
               flexWrap: 'wrap',
-              gap: '10px'
+              gap: '12px'
             }}
           >
             <div>
@@ -243,34 +255,79 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
                 Biopython transcript operations verified.
               </p>
             </div>
-            {currentUser ? (
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
               <button
                 type="button"
-                onClick={handleSaveToNotebook}
-                disabled={saving || savedSuccess}
-                className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '0.82rem',
-                  borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
-                  color: savedSuccess ? 'var(--accent-emerald)' : undefined
-                }}
-              >
-                {savedSuccess ? <Check size={15} /> : <Bookmark size={15} />}
-                {savedSuccess ? 'Saved to Lab Notebook' : saving ? 'Saving...' : 'Save to Lab Notebook'}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => onNavigate('login')}
                 className="btn-secondary"
-                style={{ fontSize: '0.8rem' }}
+                onClick={() =>
+                  exportAsFasta({
+                    module: 'RNA',
+                    sequence: result.sequence,
+                    length: result.length,
+                    gc_content: result.gc_content,
+                    at_or_au_content: result.au_content,
+                    counts: result.counts,
+                    reverse_complement: result.reverse_complement,
+                    derived_sequence: result.cdna,
+                    protein_translation: result.protein_translation
+                  })
+                }
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', padding: '6px 12px' }}
               >
-                Sign In to Save Run
+                <Download size={14} /> Export FASTA
               </button>
-            )}
+
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  exportAsJson({
+                    module: 'RNA',
+                    sequence: result.sequence,
+                    length: result.length,
+                    gc_content: result.gc_content,
+                    at_or_au_content: result.au_content,
+                    counts: result.counts,
+                    reverse_complement: result.reverse_complement,
+                    derived_sequence: result.cdna,
+                    protein_translation: result.protein_translation
+                  })
+                }
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', padding: '6px 12px' }}
+              >
+                <FileDown size={14} /> Export JSON
+              </button>
+
+              {currentUser ? (
+                <button
+                  type="button"
+                  onClick={handleSaveToNotebook}
+                  disabled={saving || savedSuccess}
+                  className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.8rem',
+                    borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
+                    color: savedSuccess ? 'var(--accent-emerald)' : undefined
+                  }}
+                >
+                  {savedSuccess ? <Check size={14} /> : <Bookmark size={14} />}
+                  {savedSuccess ? 'Saved to Notebook' : saving ? 'Saving...' : 'Save to Notebook'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('login')}
+                  className="btn-secondary"
+                  style={{ fontSize: '0.8rem' }}
+                >
+                  Sign In to Save
+                </button>
+              )}
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
@@ -377,4 +434,4 @@ export const RnaAnalyzerPage: React.FC<RnaAnalyzerPageProps> = ({ onNavigate }) 
     </div>
   );
 };
-      
+                           
