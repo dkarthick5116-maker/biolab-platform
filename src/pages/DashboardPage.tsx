@@ -9,11 +9,6 @@ import {
   FileText, 
   Sparkles, 
   Search, 
-  GitCompare, 
-  BookOpen, 
-  Cpu, 
-  Clock, 
-  CheckCircle2, 
   Layers 
 } from 'lucide-react';
 
@@ -256,4 +251,4 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate }) => {
     </div>
   );
 };
-                
+                        
