@@ -1,4 +1,4 @@
-import { collection, addDoc, doc, updateDoc, increment, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { collection, addDoc, doc, setDoc, increment, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { db } from './firebase';
 
 export interface AnalysisRecord {
@@ -22,20 +22,22 @@ export const saveAnalysisRun = async (
   const userAnalysesRef = collection(db, 'users', uid, 'analyses');
   const userDocRef = doc(db, 'users', uid);
 
-  // 1. Add record to subcollection
-  const docRef = await addDoc(userAnalysesRef, {
+  // Wrap the Firestore write in a 5-second timeout promise
+  const savePromise = addDoc(userAnalysesRef, {
     ...record,
     timestamp: new Date().toISOString()
   });
 
-  // 2. Increment user profile counter
-  try {
-    await updateDoc(userDocRef, {
-      analysesRun: increment(1)
-    });
-  } catch (err) {
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('Save request timed out. Check Firestore rules.')), 6000)
+  );
+
+  const docRef = await Promise.race([savePromise, timeoutPromise]);
+
+  // Non-blocking counter increment using merge to avoid missing document errors
+  setDoc(userDocRef, { analysesRun: increment(1) }, { merge: true }).catch((err) => {
     console.warn('Could not increment analyses counter:', err);
-  }
+  });
 
   return docRef.id;
 };
@@ -55,3 +57,4 @@ export const fetchRecentAnalyses = async (uid: string, maxItems: number = 5): Pr
     return [];
   }
 };
+                             
