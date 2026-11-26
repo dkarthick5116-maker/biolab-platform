@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ActivePage } from '../types';
-import { ArrowLeft, Dna, Play, RotateCcw, AlertCircle, CheckCircle2, Copy } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { saveAnalysisRun } from '../services/historyService';
+import { ArrowLeft, Dna, Play, RotateCcw, AlertCircle, CheckCircle2, Copy, Bookmark, Check } from 'lucide-react';
 
 interface DnaAnalyzerPageProps {
   onNavigate: (page: ActivePage) => void;
@@ -22,35 +24,78 @@ interface AnalysisResult {
 }
 
 export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) => {
+  const { currentUser, refreshProfile } = useAuth();
   const [sequence, setSequence] = useState('ATGCGTACGTAGCTAGCTAG');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedSuccess, setSavedSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const handleAnalyze = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAnalyze = async (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    if (!sequence.trim() || loading) return;
+
     setError(null);
+    setSavedSuccess(false);
     setLoading(true);
 
     try {
       const response = await fetch('/api/analyze/dna', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sequence })
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ sequence: sequence.trim().toUpperCase() })
       });
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error(`API error (${response.status}). Check Vercel function logs.`);
+      }
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.detail || 'Analysis computation failed.');
+        throw new Error(data.detail || data.message || `Analysis failed (${response.status})`);
       }
 
-      setResult(data.data);
+      setResult(data.data || data);
     } catch (err: any) {
       setError(err.message || 'Error communicating with Biopython backend.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveToNotebook = async () => {
+    if (!currentUser || !result || saving || savedSuccess) return;
+
+    setSaving(true);
+    try {
+      await saveAnalysisRun(currentUser.uid, {
+        module: 'DNA',
+        sequence: result.sequence,
+        length: result.length,
+        gcContent: result.gc_content,
+        secondaryMetric: {
+          label: 'AT Content',
+          value: result.at_content
+        },
+        summary: `DNA ${result.length} bp | GC: ${result.gc_content}% | Transcribed: ${result.rna_transcript.substring(0, 15)}...`
+      });
+      setSavedSuccess(true);
+      await refreshProfile();
+    } catch (err: any) {
+      setError('Failed to record run in notebook.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -63,6 +108,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
   return (
     <div style={{ maxWidth: '900px', margin: '20px auto', padding: '0 16px', width: '100%' }}>
       <button
+        type="button"
         onClick={() => onNavigate('dashboard')}
         className="btn-secondary"
         style={{ marginBottom: '16px', fontSize: '0.85rem' }}
@@ -96,7 +142,6 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
         </div>
       </div>
 
-      {/* Error Banner */}
       {error && (
         <div
           style={{
@@ -118,7 +163,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
 
       {/* Input Section */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
-        <form onSubmit={handleAnalyze}>
+        <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <label style={{ fontSize: '0.82rem', color: 'var(--text-muted)', fontWeight: 600 }}>
               Input Nucleotide Sequence (A, T, G, C)
@@ -133,7 +178,6 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
             value={sequence}
             onChange={(e) => setSequence(e.target.value.toUpperCase())}
             placeholder="e.g. ATGCGTACGTAGCTAGCTAG"
-            required
             style={{
               width: '100%',
               padding: '12px',
@@ -151,9 +195,10 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
 
           <div style={{ display: 'flex', gap: '10px', marginTop: '14px', flexWrap: 'wrap' }}>
             <button
-              type="submit"
+              type="button"
               className="btn-primary"
               disabled={loading || !sequence.trim()}
+              onClick={handleAnalyze}
               style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
             >
               <Play size={16} /> {loading ? 'Running Biopython...' : 'Execute Analysis'}
@@ -165,19 +210,69 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
                 setSequence('ATGCGTACGTAGCTAGCTAG');
                 setResult(null);
                 setError(null);
+                setSavedSuccess(false);
               }}
               style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
             >
               <RotateCcw size={16} /> Reset Sample
             </button>
           </div>
-        </form>
+        </div>
       </div>
 
       {/* Results View */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Key Metrics Grid */}
+          {/* Persistence action bar */}
+          <div
+            className="glass-panel"
+            style={{
+              padding: '14px 20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}
+          >
+            <div>
+              <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                Analysis Complete
+              </span>
+              <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                Biopython sequence calculation verified.
+              </p>
+            </div>
+            {currentUser ? (
+              <button
+                type="button"
+                onClick={handleSaveToNotebook}
+                disabled={saving || savedSuccess}
+                className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '0.82rem',
+                  borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
+                  color: savedSuccess ? 'var(--accent-emerald)' : undefined
+                }}
+              >
+                {savedSuccess ? <Check size={15} /> : <Bookmark size={15} />}
+                {savedSuccess ? 'Saved to Lab Notebook' : saving ? 'Saving...' : 'Save to Lab Notebook'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onNavigate('login')}
+                className="btn-secondary"
+                style={{ fontSize: '0.8rem' }}
+              >
+                Sign In to Save Run
+              </button>
+            )}
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Sequence Length</span>
@@ -201,7 +296,6 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
             </div>
           </div>
 
-          {/* Nucleotide Frequency Table */}
           <div className="glass-panel" style={{ padding: '20px' }}>
             <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '14px' }}>Base Distribution</h3>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', textAlign: 'center' }}>
@@ -224,14 +318,14 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
             </div>
           </div>
 
-          {/* Biological Transformations */}
           <div className="glass-panel" style={{ padding: '20px' }}>
             <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '14px' }}>Transcripts & Complements</h3>
-            
+
             <div style={{ marginBottom: '14px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>Reverse Complement (3' → 5' inverted)</span>
                 <button
+                  type="button"
                   onClick={() => copyToClipboard(result.reverse_complement, 'rev')}
                   style={{ background: 'transparent', border: 'none', color: 'var(--accent-cyan)', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -248,6 +342,7 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>RNA Transcript (transcribed with Uridine)</span>
                 <button
+                  type="button"
                   onClick={() => copyToClipboard(result.rna_transcript, 'rna')}
                   style={{ background: 'transparent', border: 'none', color: 'var(--accent-cyan)', cursor: 'pointer', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -265,4 +360,4 @@ export const DnaAnalyzerPage: React.FC<DnaAnalyzerPageProps> = ({ onNavigate }) 
     </div>
   );
 };
-                       
+    
