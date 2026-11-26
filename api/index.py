@@ -7,6 +7,7 @@ from Bio.SeqUtils import gc_fraction
 
 app = FastAPI(
     title="BioLab Scientific API",
+    description="Computational biology and sequence analysis engine for BioLab.",
     version="1.0.0"
 )
 
@@ -92,20 +93,17 @@ def analyze_rna(raw_sequence: str) -> dict:
     count_g = cleaned_seq.count("G")
     count_c = cleaned_seq.count("C")
 
-    # GC and AU content
     gc_bases = count_g + count_c
     gc_percent = round((gc_bases / seq_len) * 100, 2) if seq_len > 0 else 0.0
     au_percent = round(100.0 - gc_percent, 2)
 
-    # Biological transformations
     reverse_comp = str(seq_obj.reverse_complement_rna())
     dna_cdna = str(seq_obj.back_transcribe())
     
-    # Translation to peptide (stops at stop codon or complete translation)
     try:
         protein_translation = str(seq_obj.translate(to_stop=False))
     except Exception:
-        protein_translation = "N/A (Sequence not divisible into complete codons)"
+        protein_translation = "N/A (Incomplete codon frame)"
 
     return {
         "sequence": cleaned_seq,
@@ -128,7 +126,7 @@ class SequenceRequest(BaseModel):
         ...,
         min_length=1,
         max_length=100_000,
-        description="Nucleotide sequence string"
+        description="Nucleotide sequence"
     )
 
 @app.get("/api/health")
@@ -159,4 +157,4 @@ def run_rna_analysis(payload: SequenceRequest):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Computation error: {str(e)}")
-    
+        
