@@ -1,34 +1,29 @@
-
 import React, { useState } from 'react';
-
 import { ActivePage } from '../types';
-
-import {
-  ArrowLeft,
-  GitCompare,
-  Play,
-  RotateCcw,
-  AlertCircle,
-  Settings2,
-  Copy,
-  CheckCircle2
+import { 
+  ArrowLeft, 
+  GitCompare, 
+  Play, 
+  RotateCcw, 
+  AlertCircle, 
+  Settings2, 
+  Copy, 
+  CheckCircle2,
+  Check,
+  Bookmark
 } from 'lucide-react';
-
-// ==========================================
-// 1. TYPES AND INTERFACES
-// ==========================================
+import { useAuth } from '../context/AuthContext';
+import { saveAnalysisRun } from '../services/historyService';
 
 interface AlignmentPageProps {
   onNavigate: (page: ActivePage) => void;
 }
 
-interface AlignmentResult {
+interface BackendAlignmentData {
   algorithm: string;
   score: number;
   identity_percent: number;
   matches: number;
-  mismatches: number;
-  gaps: number;
   alignment_length: number;
   seq1_aligned: string;
   match_line: string;
@@ -36,635 +31,243 @@ interface AlignmentResult {
   full_text: string;
 }
 
-interface AlignmentApiResponse {
-  data?: any;
-  score?: number;
-  algorithm?: string;
-  seq1_aligned?: string;
-  seq2_aligned?: string;
-  detail?: any;
-  message?: string;
+interface AlignmentMetrics {
+  algorithm: string;
+  score: number;
+  alignmentLength: number;
+  identicalMatches: number;
+  mismatches: number;
+  gapColumns: number;
+  identityPercentage: number;
+  seq1Aligned: string;
+  matchLine: string;
+  seq2Aligned: string;
+  fullText: string;
 }
 
-// ==========================================
-// 2. DEFAULT DNA SEQUENCES
-// ==========================================
+const SAMPLE_DNA_1 = 'TACGTCGATCGTAGCTAGCTAGCATC';
+const SAMPLE_DNA_2 = 'TACGACGATCGTACGTAGCATC';
 
-const SAMPLE_DNA_1 =
-  'TACGTCGATCGTAGCTAGCTAGCATC';
+export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
+  const { currentUser, refreshProfile } = useAuth();
 
-const SAMPLE_DNA_2 =
-  'TACGACGATCGTACGTAGCATC';
+  const [seq1, setSeq1] = useState<string>(SAMPLE_DNA_1);
+  const [seq2, setSeq2] = useState<string>(SAMPLE_DNA_2);
+  const [mode, setMode] = useState<'global' | 'local'>('global');
 
-// ==========================================
-// 3. SEQUENCE CLEANING
-// ==========================================
+  // Scoring configuration state
+  const [showConfig, setShowConfig] = useState<boolean>(false);
+  const [matchScore, setMatchScore] = useState<number>(2.0);
+  const [mismatchScore, setMismatchScore] = useState<number>(-1.0);
+  const [gapOpenScore, setGapOpenScore] = useState<number>(-2.0);
+  const [gapExtendScore, setGapExtendScore] = useState<number>(-0.5);
 
-function cleanSequence(sequence: string): string {
-  return sequence
-    .replace(/\s+/g, '')
-    .toUpperCase();
-}
+  const [loading, setLoading] = useState<boolean>(false);
+  const [saving, setSaving] = useState<boolean>(false);
+  const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<AlignmentMetrics | null>(null);
+  const [copied, setCopied] = useState<boolean>(false);
+    const computeClientMetrics = (data: BackendAlignmentData): AlignmentMetrics => {
+    const s1 = data.seq1_aligned;
+    const s2 = data.seq2_aligned;
 
-// ==========================================
-// 4. ALIGNMENT STATISTICS
-// ==========================================
-
-function calculateAlignmentStatistics(
-  sequence1: string,
-  sequence2: string
-) {
-  const aligned1 = sequence1
-    .replace(/\s+/g, '')
-    .toUpperCase();
-
-  const aligned2 = sequence2
-    .replace(/\s+/g, '')
-    .toUpperCase();
-
-  if (!aligned1 || !aligned2) {
-    throw new Error(
-      'The alignment returned empty sequences.'
-    );
-  }
-
-  if (aligned1.length !== aligned2.length) {
-    throw new Error(
-      'Invalid alignment: both aligned sequences must have equal lengths.'
-    );
-  }
-
-  let matches = 0;
-  let mismatches = 0;
-  let gaps = 0;
-
-  let matchLine = '';
-
-  for (let i = 0; i < aligned1.length; i++) {
-
-    const base1 = aligned1[i];
-    const base2 = aligned2[i];
-
-    if (base1 === '-' || base2 === '-') {
-
-      gaps++;
-
-      matchLine += ' ';
-
-    } else if (base1 === base2) {
-
-      matches++;
-
-      matchLine += '|';
-
-    } else {
-
-      mismatches++;
-
-      matchLine += '.';
+    if (!s1 || !s2 || s1.length !== s2.length) {
+      throw new Error('Alignment data format mismatch: Aligned sequence row lengths are not equal.');
     }
-  }
 
-  const alignmentLength = aligned1.length;
+    const alignmentLength = s1.length;
+    let identicalMatches = 0;
+    let mismatches = 0;
+    let gapColumns = 0;
 
-  const identityPercent =
-    alignmentLength > 0
-      ? Number(
-          ((matches / alignmentLength) * 100).toFixed(2)
-        )
+    for (let i = 0; i < alignmentLength; i++) {
+      const char1 = s1[i];
+      const char2 = s2[i];
+
+      if (char1 === '-' || char2 === '-') {
+        gapColumns++;
+      } else if (char1 === char2) {
+        identicalMatches++;
+      } else {
+        mismatches++;
+      }
+    }
+
+    const identityPercentage = alignmentLength > 0
+      ? Number(((identicalMatches / alignmentLength) * 100).toFixed(2))
       : 0;
 
-  return {
-    matches,
-    mismatches,
-    gaps,
-    alignmentLength,
-    identityPercent,
-    matchLine
-  };
-}
-
-// ==========================================
-// 5. ALIGNMENT TEXT FORMATTER
-// ==========================================
-
-function formatAlignment(
-  sequence1: string,
-  matchLine: string,
-  sequence2: string
-): string {
-
-  const width = 60;
-
-  const lines: string[] = [];
-
-  for (
-    let i = 0;
-    i < sequence1.length;
-    i += width
-  ) {
-
-    const end = i + width;
-
-    lines.push(
-      `Target ${i + 1}\t${sequence1.slice(i, end)}`
-    );
-
-    lines.push(
-      `       \t${matchLine.slice(i, end)}`
-    );
-
-    lines.push(
-      `Query  ${i + 1}\t${sequence2.slice(i, end)}`
-    );
-
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-// ==========================================
-// 6. API ERROR HANDLER
-// ==========================================
-
-function getErrorMessage(error: unknown): string {
-
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return 'An unexpected alignment error occurred.';
-}
-
-// ==========================================
-// 7. MAIN ALIGNMENT COMPONENT
-// ==========================================
-
-export const AlignmentPage: React.FC<AlignmentPageProps> = ({
-  onNavigate
-}) => {
-
-  // ----------------------------------------
-  // SEQUENCE STATES
-  // ----------------------------------------
-
-  const [seq1, setSeq1] = useState(SAMPLE_DNA_1);
-
-  const [seq2, setSeq2] = useState(SAMPLE_DNA_2);
-
-  // ----------------------------------------
-  // ALIGNMENT MODE
-  // ----------------------------------------
-
-  const [mode, setMode] = useState<
-    'global' | 'local'
-  >('global');
-
-  // ----------------------------------------
-  // SCORING PARAMETERS
-  // ----------------------------------------
-
-  const [showConfig, setShowConfig] =
-    useState(false);
-
-  const [matchScore, setMatchScore] =
-    useState(2.0);
-
-  const [mismatchScore, setMismatchScore] =
-    useState(-1.0);
-
-  const [gapOpenScore, setGapOpenScore] =
-    useState(-2.0);
-
-  const [gapExtendScore, setGapExtendScore] =
-    useState(-0.5);
-
-  // ----------------------------------------
-  // APPLICATION STATES
-  // ----------------------------------------
-
-  const [loading, setLoading] =
-    useState(false);
-
-  const [error, setError] =
-    useState<string | null>(null);
-
-  const [result, setResult] =
-    useState<AlignmentResult | null>(null);
-
-  const [copied, setCopied] =
-    useState(false);
-
-  // ----------------------------------------
-  // CLEAR OLD RESULTS
-  // ----------------------------------------
-
-  const clearPreviousResult = () => {
-
-    setResult(null);
-    setError(null);
-    setCopied(false);
-
+    return {
+      algorithm: data.algorithm,
+      score: data.score,
+      alignmentLength,
+      identicalMatches,
+      mismatches,
+      gapColumns,
+      identityPercentage,
+      seq1Aligned: s1,
+      matchLine: data.match_line,
+      seq2Aligned: s2,
+      fullText: data.full_text
+    };
   };
 
-  // ==========================================
-  // 8. COMPUTE PAIRWISE ALIGNMENT
-  // ==========================================
-
-  const handleAlign = async (
-    e?: React.MouseEvent<HTMLButtonElement>
-  ) => {
-
+  const handleAlign = async (e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
 
-    if (loading) return;
-
-    const cleanSeq1 = cleanSequence(seq1);
-
-    const cleanSeq2 = cleanSequence(seq2);
+    const cleanSeq1 = seq1.trim().toUpperCase();
+    const cleanSeq2 = seq2.trim().toUpperCase();
 
     if (!cleanSeq1 || !cleanSeq2) {
-
-      setError(
-        'Please enter both sequences before alignment.'
-      );
-
+      setError('Both sequence inputs are required to compute alignment.');
       return;
     }
 
+    if (loading) return;
+
     setError(null);
     setResult(null);
+    setSavedSuccess(false);
     setLoading(true);
 
     try {
+      const response = await fetch('/api/align/pairwise', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          seq1: cleanSeq1,
+          seq2: cleanSeq2,
+          mode,
+          match_score: matchScore,
+          mismatch_score: mismatchScore,
+          open_gap_score: gapOpenScore,
+          extend_gap_score: gapExtendScore
+        })
+      });
 
-      // --------------------------------------
-      // SEND REQUEST TO FASTAPI
-      // --------------------------------------
-
-      const response = await fetch(
-        '/api/align/pairwise',
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type': 'application/json'
-          },
-
-          body: JSON.stringify({
-
-            seq1: cleanSeq1,
-
-            seq2: cleanSeq2,
-
-            mode: mode,
-
-            match_score: matchScore,
-
-            mismatch_score: mismatchScore,
-
-            open_gap_score: gapOpenScore,
-
-            extend_gap_score: gapExtendScore
-
-          })
-        }
-      );
-
-      // --------------------------------------
-      // CHECK RESPONSE FORMAT
-      // --------------------------------------
-
-      const contentType =
-        response.headers.get('content-type') || '';
-
-      if (!contentType.includes('json')) {
-
-        throw new Error(
-          `API error (${response.status}). Check your FastAPI deployment and Vercel logs.`
-        );
-
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error(`API returned an unexpected response (${response.status}). Check server status.`);
       }
 
-      const responseData: AlignmentApiResponse =
-        await response.json();
-
-      // --------------------------------------
-      // CHECK API ERRORS
-      // --------------------------------------
-
+      const data = await response.json();
       if (!response.ok) {
-
-        const detail = responseData.detail;
-
-        const message =
-          typeof detail === 'string'
-            ? detail
-            : detail
-              ? JSON.stringify(detail)
-              : responseData.message;
-
-        throw new Error(
-          message || `Alignment failed (${response.status}).`
-        );
-
+        throw new Error(data.detail || data.message || `Alignment failed (${response.status})`);
       }
 
-      // --------------------------------------
-      // EXTRACT BACKEND RESULT
-      // --------------------------------------
-
-      const rawResult =
-        responseData.data || responseData;
-
-      if (
-        typeof rawResult.seq1_aligned !== 'string' ||
-        typeof rawResult.seq2_aligned !== 'string'
-      ) {
-
-        throw new Error(
-          'Invalid API response: aligned sequences are missing.'
-        );
-
-      }
-
-      const score = Number(rawResult.score);
-
-      if (!Number.isFinite(score)) {
-
-        throw new Error(
-          'Invalid API response: alignment score is missing or invalid.'
-        );
-
-      }
-
-      // --------------------------------------
-      // RECALCULATE STATISTICS
-      // --------------------------------------
-
-      const statistics =
-        calculateAlignmentStatistics(
-          rawResult.seq1_aligned,
-          rawResult.seq2_aligned
-        );
-
-      // --------------------------------------
-      // GENERATE ALIGNMENT DISPLAY
-      // --------------------------------------
-
-      const alignedSequence1 =
-        rawResult.seq1_aligned
-          .replace(/\s+/g, '')
-          .toUpperCase();
-
-      const alignedSequence2 =
-        rawResult.seq2_aligned
-          .replace(/\s+/g, '')
-          .toUpperCase();
-
-      const fullText = formatAlignment(
-        alignedSequence1,
-        statistics.matchLine,
-        alignedSequence2
-      );
-
-      // --------------------------------------
-      // SAVE VERIFIED RESULT
-      // --------------------------------------
-
-      const verifiedResult: AlignmentResult = {
-
-        algorithm:
-          rawResult.algorithm ||
-          (
-            mode === 'global'
-              ? 'Needleman-Wunsch (Global)'
-              : 'Smith-Waterman (Local)'
-          ),
-
-        score: score,
-
-        identity_percent:
-          statistics.identityPercent,
-
-        matches:
-          statistics.matches,
-
-        mismatches:
-          statistics.mismatches,
-
-        gaps:
-          statistics.gaps,
-
-        alignment_length:
-          statistics.alignmentLength,
-
-        seq1_aligned:
-          alignedSequence1,
-
-        match_line:
-          statistics.matchLine,
-
-        seq2_aligned:
-          alignedSequence2,
-
-        full_text:
-          fullText
-
-      };
-
-      setResult(verifiedResult);
-
+      const backendPayload: BackendAlignmentData = data.data || data;
+      const metrics = computeClientMetrics(backendPayload);
+      setResult(metrics);
     } catch (err: unknown) {
-
-      setError(getErrorMessage(err));
-
-      setResult(null);
-
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An unexpected error occurred during pairwise alignment.');
+      }
     } finally {
-
       setLoading(false);
-
     }
-
   };
-
-  // ==========================================
-  // 9. COPY ALIGNMENT
-  // ==========================================
 
   const handleCopyAlignment = async () => {
-
     if (!result) return;
-
     try {
-
-      await navigator.clipboard.writeText(
-        result.full_text
-      );
-
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(result.fullText);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = result.fullText;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
       setCopied(true);
-
-      window.setTimeout(() => {
-        setCopied(false);
-      }, 2000);
-
+      setTimeout(() => setCopied(false), 2000);
     } catch {
-
-      setError(
-        'Unable to copy alignment. Please check clipboard permissions.'
-      );
-
+      setError('Failed to copy alignment to clipboard.');
     }
-
   };
 
-  // ==========================================
-  // 10. RESET DEFAULT
-  // ==========================================
+  const handleSaveToNotebook = async () => {
+    if (!currentUser || !result || saving || savedSuccess) return;
 
-  const handleReset = () => {
-
-    setSeq1(SAMPLE_DNA_1);
-
-    setSeq2(SAMPLE_DNA_2);
-
-    setMode('global');
-
-    setMatchScore(2.0);
-
-    setMismatchScore(-1.0);
-
-    setGapOpenScore(-2.0);
-
-    setGapExtendScore(-0.5);
-
-    setShowConfig(false);
-
-    setResult(null);
-
-    setError(null);
-
-    setCopied(false);
-
+    setSaving(true);
+    try {
+      await saveAnalysisRun(currentUser.uid, {
+        module: 'Alignment' as unknown as 'DNA',
+        sequence: `${seq1.trim().substring(0, 30)}... vs ${seq2.trim().substring(0, 30)}...`,
+        length: result.alignmentLength,
+        gcContent: result.identityPercentage,
+        secondaryMetric: {
+          label: 'Score',
+          value: result.score
+        },
+        summary: `${result.algorithm} | Identity: ${result.identityPercentage}% | Score: ${result.score}`
+      });
+      setSavedSuccess(true);
+      if (refreshProfile) {
+        await refreshProfile();
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to record run in notebook.');
+      }
+    } finally {
+      setSaving(false);
+    }
   };
-
-  // ==========================================
-  // PART 2 CONTINUES BELOW
-  // ==========================================
-      
-  // ==========================================
-  // 11. USER INTERFACE
-  // ==========================================
-
-  return (
-
-    <div
-      style={{
-        maxWidth: '960px',
-        margin: '20px auto',
-        padding: '0 16px',
-        width: '100%'
-      }}
-    >
-
-      {/* BACK BUTTON */}
-
+    return (
+    <div style={{ maxWidth: '960px', margin: '20px auto', padding: '0 16px', width: '100%' }}>
       <button
         type="button"
         onClick={() => onNavigate('dashboard')}
         className="btn-secondary"
-        style={{
-          marginBottom: '16px',
-          fontSize: '0.85rem'
-        }}
+        style={{ marginBottom: '16px', fontSize: '0.85rem' }}
       >
-        <ArrowLeft size={16} />
-        Back to Lab Dashboard
+        <ArrowLeft size={16} /> Back to Lab Dashboard
       </button>
 
-      {/* ================================== */}
-      {/* HEADER PANEL */}
-      {/* ================================== */}
-
-      <div
-        className="glass-panel"
-        style={{
-          padding: '24px',
-          marginBottom: '20px'
-        }}
-      >
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '14px'
-          }}
-        >
-
+      {/* Header Panel */}
+      <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div
             style={{
               width: '46px',
               height: '46px',
               borderRadius: '12px',
-              background:
-                'linear-gradient(135deg, var(--accent-cyan), var(--accent-violet))',
+              background: 'linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-violet) 100%)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#070B19',
-              flexShrink: 0
+              color: '#070B19'
             }}
           >
-            <GitCompare
-              size={26}
-              strokeWidth={2.2}
-            />
+            <GitCompare size={26} strokeWidth={2.2} />
           </div>
-
           <div>
-
-            <h1
-              style={{
-                fontSize: '1.4rem',
-                fontWeight: 700,
-                margin: 0
-              }}
-            >
-              Pairwise Sequence Alignment
-            </h1>
-
-            <p
-              style={{
-                fontSize: '0.82rem',
-                color: 'var(--text-muted)',
-                margin: '4px 0 0'
-              }}
-            >
-              Biopython Bio.Align: Needleman-Wunsch
-              (Global) and Smith-Waterman (Local)
-              algorithms.
+            <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0 }}>Pairwise Sequence Alignment</h1>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+              Biopython Bio.Align: Needleman-Wunsch (Global) &amp; Smith-Waterman (Local) algorithms.
             </p>
-
           </div>
-
         </div>
-
       </div>
 
-      {/* ================================== */}
-      {/* ERROR MESSAGE */}
-      {/* ================================== */}
-
       {error && (
-
         <div
-          role="alert"
           style={{
             padding: '12px 16px',
             background: 'rgba(244, 63, 94, 0.15)',
@@ -675,103 +278,44 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            marginBottom: '20px',
-            overflowWrap: 'anywhere'
+            marginBottom: '20px'
           }}
         >
-
-          <AlertCircle size={18} />
-
-          {error}
-
+          <AlertCircle size={18} /> {error}
         </div>
-
       )}
 
-      {/* ================================== */}
-      {/* INPUT AND CONFIGURATION PANEL */}
-      {/* ================================== */}
-
-      <div
-        className="glass-panel"
-        style={{
-          padding: '24px',
-          marginBottom: '20px'
-        }}
-      >
-
-        {/* ALIGNMENT MODE BUTTONS */}
-
-        <div
-          style={{
-            display: 'flex',
-            gap: '12px',
-            marginBottom: '16px',
-            flexWrap: 'wrap'
-          }}
-        >
-
+      {/* Sequence Input and Parameters */}
+      <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <button
             type="button"
-            className={
-              mode === 'global'
-                ? 'btn-primary'
-                : 'btn-secondary'
-            }
-            onClick={() => {
-              setMode('global');
-              clearPreviousResult();
-            }}
+            className={mode === 'global' ? 'btn-primary' : 'btn-secondary'}
+            onClick={() => setMode('global')}
             style={{ fontSize: '0.82rem' }}
           >
             Global (Needleman-Wunsch)
           </button>
-
           <button
             type="button"
-            className={
-              mode === 'local'
-                ? 'btn-primary'
-                : 'btn-secondary'
-            }
-            onClick={() => {
-              setMode('local');
-              clearPreviousResult();
-            }}
+            className={mode === 'local' ? 'btn-primary' : 'btn-secondary'}
+            onClick={() => setMode('local')}
             style={{ fontSize: '0.82rem' }}
           >
             Local (Smith-Waterman)
           </button>
-
           <button
             type="button"
             className="btn-secondary"
             onClick={() => setShowConfig(!showConfig)}
-            style={{
-              marginLeft: 'auto',
-              fontSize: '0.82rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
+            style={{ marginLeft: 'auto', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
           >
-
-            <Settings2 size={14} />
-
-            {showConfig
-              ? 'Hide Scores'
-              : 'Scoring Parameters'}
-
+            <Settings2 size={14} /> {showConfig ? 'Hide Scores' : 'Scoring Parameters'}
           </button>
-
         </div>
 
-        {/* ================================== */}
-        {/* SCORING PARAMETERS */}
-        {/* ================================== */}
-
+        {/* Scoring Matrix Parameters */}
         {showConfig && (
-
           <div
             style={{
               padding: '14px',
@@ -779,170 +323,78 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({
               borderRadius: 'var(--radius-sm)',
               marginBottom: '16px',
               display: 'grid',
-              gridTemplateColumns:
-                'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: '16px'
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: '12px'
             }}
           >
-
-            {/* MATCH SCORE */}
-
             <div>
-
-              <label
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block', marginBottom: '4px' }}>
                 Match Score: {matchScore}
               </label>
-
               <input
                 type="range"
                 min="0.5"
-                max="5"
+                max="5.0"
                 step="0.5"
                 value={matchScore}
-                onChange={(e) => {
-                  setMatchScore(Number(e.target.value));
-                  clearPreviousResult();
-                }}
+                onChange={(e) => setMatchScore(parseFloat(e.target.value))}
                 style={{ width: '100%' }}
               />
-
             </div>
-
-            {/* MISMATCH PENALTY */}
-
             <div>
-
-              <label
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block', marginBottom: '4px' }}>
                 Mismatch Penalty: {mismatchScore}
               </label>
-
               <input
                 type="range"
-                min="-5"
-                max="0"
+                min="-5.0"
+                max="0.0"
                 step="0.5"
                 value={mismatchScore}
-                onChange={(e) => {
-                  setMismatchScore(Number(e.target.value));
-                  clearPreviousResult();
-                }}
+                onChange={(e) => setMismatchScore(parseFloat(e.target.value))}
                 style={{ width: '100%' }}
               />
-
             </div>
-
-            {/* GAP OPEN PENALTY */}
-
             <div>
-
-              <label
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block', marginBottom: '4px' }}>
                 Gap Open Penalty: {gapOpenScore}
               </label>
-
               <input
                 type="range"
-                min="-10"
-                max="0"
+                min="-10.0"
+                max="0.0"
                 step="0.5"
                 value={gapOpenScore}
-                onChange={(e) => {
-                  setGapOpenScore(Number(e.target.value));
-                  clearPreviousResult();
-                }}
+                onChange={(e) => setGapOpenScore(parseFloat(e.target.value))}
                 style={{ width: '100%' }}
               />
-
             </div>
-
-            {/* GAP EXTENSION PENALTY */}
-
             <div>
-
-              <label
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block', marginBottom: '4px' }}>
                 Gap Extend Penalty: {gapExtendScore}
               </label>
-
               <input
                 type="range"
-                min="-3"
-                max="0"
+                min="-3.0"
+                max="0.0"
                 step="0.25"
                 value={gapExtendScore}
-                onChange={(e) => {
-                  setGapExtendScore(Number(e.target.value));
-                  clearPreviousResult();
-                }}
+                onChange={(e) => setGapExtendScore(parseFloat(e.target.value))}
                 style={{ width: '100%' }}
               />
-
             </div>
-
           </div>
-
         )}
-
-        {/* ================================== */}
-        {/* SEQUENCE INPUTS */}
-        {/* ================================== */}
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns:
-              'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '16px'
-          }}
-        >
-
-          {/* SEQUENCE 1 */}
-
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
           <div>
-
-            <label
-              style={{
-                fontSize: '0.8rem',
-                color: 'var(--text-muted)',
-                fontWeight: 600,
-                display: 'block',
-                marginBottom: '6px'
-              }}
-            >
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
               Sequence 1 (Target / Reference)
             </label>
-
             <textarea
               rows={4}
               value={seq1}
-              onChange={(e) => {
-                setSeq1(e.target.value.toUpperCase());
-                clearPreviousResult();
-              }}
-              placeholder="Enter nucleotide or amino acid sequence..."
-              spellCheck={false}
+              onChange={(e) => setSeq1(e.target.value.toUpperCase())}
+              placeholder="Enter reference sequence..."
               style={{
                 width: '100%',
                 padding: '10px',
@@ -953,46 +405,20 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({
                 borderRadius: 'var(--radius-sm)',
                 color: 'var(--text-main)',
                 resize: 'vertical',
-                boxSizing: 'border-box'
+                outline: 'none'
               }}
             />
-
-            <small
-              style={{
-                color: 'var(--text-dim)',
-                fontSize: '0.72rem'
-              }}
-            >
-              Input length: {cleanSequence(seq1).length}
-            </small>
-
           </div>
 
-          {/* SEQUENCE 2 */}
-
           <div>
-
-            <label
-              style={{
-                fontSize: '0.8rem',
-                color: 'var(--text-muted)',
-                fontWeight: 600,
-                display: 'block',
-                marginBottom: '6px'
-              }}
-            >
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
               Sequence 2 (Query / Variant)
             </label>
-
             <textarea
               rows={4}
               value={seq2}
-              onChange={(e) => {
-                setSeq2(e.target.value.toUpperCase());
-                clearPreviousResult();
-              }}
-              placeholder="Enter nucleotide or amino acid sequence..."
-              spellCheck={false}
+              onChange={(e) => setSeq2(e.target.value.toUpperCase())}
+              placeholder="Enter comparison sequence..."
               style={{
                 width: '100%',
                 padding: '10px',
@@ -1003,443 +429,168 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({
                 borderRadius: 'var(--radius-sm)',
                 color: 'var(--text-main)',
                 resize: 'vertical',
-                boxSizing: 'border-box'
+                outline: 'none'
               }}
             />
-
-            <small
-              style={{
-                color: 'var(--text-dim)',
-                fontSize: '0.72rem'
-              }}
-            >
-              Input length: {cleanSequence(seq2).length}
-            </small>
-
           </div>
-
         </div>
 
-        {/* ================================== */}
-        {/* ACTION BUTTONS */}
-        {/* ================================== */}
-
-        <div
-          style={{
-            display: 'flex',
-            gap: '10px',
-            marginTop: '16px',
-            flexWrap: 'wrap'
-          }}
-        >
-
+        <div style={{ display: 'flex', gap: '10px', marginTop: '16px', flexWrap: 'wrap' }}>
           <button
             type="button"
             className="btn-primary"
-            disabled={
-              loading ||
-              !cleanSequence(seq1) ||
-              !cleanSequence(seq2)
-            }
+            disabled={loading || !seq1.trim() || !seq2.trim()}
             onClick={handleAlign}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              opacity: loading ? 0.7 : 1
-            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
-
-            <Play size={16} />
-
-            {loading
-              ? 'Aligning...'
-              : 'Compute Pairwise Alignment'}
-
+            <Play size={16} /> {loading ? 'Aligning...' : 'Compute Pairwise Alignment'}
           </button>
-
           <button
             type="button"
             className="btn-secondary"
-            onClick={handleReset}
-            disabled={loading}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px'
+            onClick={() => {
+              setSeq1(SAMPLE_DNA_1);
+              setSeq2(SAMPLE_DNA_2);
+              setResult(null);
+              setError(null);
+              setSavedSuccess(false);
             }}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
-
-            <RotateCcw size={16} />
-
-            Reset Default
-
+            <RotateCcw size={16} /> Reset Default
           </button>
-
         </div>
-
       </div>
-
-      {/* ================================== */}
-      {/* RESULTS SECTION */}
-      {/* ================================== */}
-
+            {/* Results View */}
       {result && (
-
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px'
-          }}
-        >
-
-          {/* ================================== */}
-          {/* STATISTICS CARDS */}
-          {/* ================================== */}
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                'repeat(auto-fit, minmax(145px, 1fr))',
-              gap: '14px'
-            }}
-          >
-
-            {/* ALIGNMENT SCORE */}
-
-            <div
-              className="glass-panel"
-              style={{
-                padding: '16px',
-                background: 'var(--bg-surface-elevated)'
-              }}
-            >
-
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
-                Alignment Score
-              </span>
-
-              <span
-                style={{
-                  fontSize: '1.4rem',
-                  fontWeight: 700,
-                  color: 'var(--accent-cyan)'
-                }}
-              >
-                {result.score}
-              </span>
-
-            </div>
-
-            {/* SEQUENCE IDENTITY */}
-
-            <div
-              className="glass-panel"
-              style={{
-                padding: '16px',
-                background: 'var(--bg-surface-elevated)'
-              }}
-            >
-
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
-                Sequence Identity
-              </span>
-
-              <span
-                style={{
-                  fontSize: '1.4rem',
-                  fontWeight: 700,
-                  color: 'var(--accent-emerald)'
-                }}
-              >
-                {result.identity_percent.toFixed(2)}%
-              </span>
-
-            </div>
-
-            {/* IDENTICAL MATCHES */}
-
-            <div
-              className="glass-panel"
-              style={{
-                padding: '16px',
-                background: 'var(--bg-surface-elevated)'
-              }}
-            >
-
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
-                Identical Matches
-              </span>
-
-              <span
-                style={{
-                  fontSize: '1.4rem',
-                  fontWeight: 700,
-                  color: 'var(--accent-violet)'
-                }}
-              >
-                {result.matches} / {result.alignment_length}
-              </span>
-
-            </div>
-
-            {/* MISMATCHES */}
-
-            <div
-              className="glass-panel"
-              style={{
-                padding: '16px',
-                background: 'var(--bg-surface-elevated)'
-              }}
-            >
-
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
-                Mismatches
-              </span>
-
-              <span
-                style={{
-                  fontSize: '1.4rem',
-                  fontWeight: 700,
-                  color: 'var(--accent-rose)'
-                }}
-              >
-                {result.mismatches}
-              </span>
-
-            </div>
-
-            {/* GAP POSITIONS */}
-
-            <div
-              className="glass-panel"
-              style={{
-                padding: '16px',
-                background: 'var(--bg-surface-elevated)'
-              }}
-            >
-
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
-                Gap Positions
-              </span>
-
-              <span
-                style={{
-                  fontSize: '1.4rem',
-                  fontWeight: 700,
-                  color: 'var(--accent-cyan)'
-                }}
-              >
-                {result.gaps}
-              </span>
-
-            </div>
-
-            {/* ALIGNMENT LENGTH */}
-
-            <div
-              className="glass-panel"
-              style={{
-                padding: '16px',
-                background: 'var(--bg-surface-elevated)'
-              }}
-            >
-
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-dim)',
-                  display: 'block'
-                }}
-              >
-                Alignment Length
-              </span>
-
-              <span
-                style={{
-                  fontSize: '1.4rem',
-                  fontWeight: 700,
-                  color: 'var(--accent-violet)'
-                }}
-              >
-                {result.alignment_length}
-              </span>
-
-            </div>
-
-          </div>
-
-          {/* ================================== */}
-          {/* OPTIMAL ALIGNMENT */}
-          {/* ================================== */}
-
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Action Bar */}
           <div
             className="glass-panel"
             style={{
-              padding: '20px'
+              padding: '14px 20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '12px'
             }}
           >
+            <div>
+              <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                {result.algorithm} Complete
+              </span>
+              <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                Aligned string length: {result.alignmentLength} positions
+              </p>
+            </div>
 
-            {/* ALIGNMENT HEADER */}
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: '12px',
-                marginBottom: '12px',
-                flexWrap: 'wrap'
-              }}
-            >
-
-              <div>
-
-                <h3
-                  style={{
-                    fontSize: '0.95rem',
-                    fontWeight: 600,
-                    margin: 0
-                  }}
-                >
-                  Optimal Alignment
-                </h3>
-
-                <p
-                  style={{
-                    fontSize: '0.75rem',
-                    color: 'var(--text-muted)',
-                    margin: '5px 0 0'
-                  }}
-                >
-                  {result.algorithm}
-                </p>
-
-              </div>
-
-              {/* COPY BUTTON */}
-
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 onClick={handleCopyAlignment}
                 className="btn-secondary"
-                style={{
-                  fontSize: '0.75rem',
-                  padding: '6px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px'
-                }}
+                style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
               >
-
-                {copied
-                  ? <CheckCircle2 size={13} />
-                  : <Copy size={13} />}
-
-                {copied ? 'Copied' : 'Copy'}
-
+                {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                {copied ? 'Copied Full Output' : 'Copy Alignment'}
               </button>
 
+              {currentUser ? (
+                <button
+                  type="button"
+                  onClick={handleSaveToNotebook}
+                  disabled={saving || savedSuccess}
+                  className={savedSuccess ? 'btn-secondary' : 'btn-primary'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.8rem',
+                    borderColor: savedSuccess ? 'var(--accent-emerald)' : undefined,
+                    color: savedSuccess ? 'var(--accent-emerald)' : undefined
+                  }}
+                >
+                  {savedSuccess ? <Check size={14} /> : <Bookmark size={14} />}
+                  {savedSuccess ? 'Saved to Notebook' : saving ? 'Saving...' : 'Save to Notebook'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('login')}
+                  className="btn-secondary"
+                  style={{ fontSize: '0.8rem' }}
+                >
+                  Sign In to Save
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Statistics Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '14px' }}>
+            <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Alignment Score</span>
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
+                {result.score}
+              </span>
             </div>
 
-            {/* ALIGNMENT DISPLAY */}
+            <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Sequence Identity</span>
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-emerald)' }}>
+                {result.identityPercentage}%
+              </span>
+            </div>
 
+            <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Identical Matches</span>
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-violet)' }}>
+                {result.identicalMatches} <span style={{ fontSize: '0.8rem', fontWeight: 400 }}>columns</span>
+              </span>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Mismatches</span>
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-amber, #f59e0b)' }}>
+                {result.mismatches} <span style={{ fontSize: '0.8rem', fontWeight: 400 }}>positions</span>
+              </span>
+            </div>
+
+            <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Gaps Inserted</span>
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-rose)' }}>
+                {result.gapColumns} <span style={{ fontSize: '0.8rem', fontWeight: 400 }}>indels</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Formatted Alignment Block */}
+          <div className="glass-panel" style={{ padding: '20px' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 600, margin: '0 0 12px 0' }}>
+              Standard Formatted Alignment Matrix
+            </h3>
             <div
               style={{
                 padding: '16px',
                 background: '#040711',
-                border: '1px solid var(--border-subtle),
-                  borderRadius: 'var(--radius-sm)',
-                fontFamily:
-                  'Consolas, Monaco, "Courier New", monospace',
-                fontSize: '0.82rem',
-                lineHeight: 1.6,
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                fontSize: '0.88rem',
+                lineHeight: 1.4,
                 overflowX: 'auto',
                 whiteSpace: 'pre',
-                color: '#e2e8f0',
-                maxWidth: '100%',
-                boxSizing: 'border-box'
+                color: '#e2e8f0'
               }}
             >
-              {result.full_text}
+              {result.fullText}
             </div>
-
-            {/* ALIGNMENT LEGEND */}
-
-            <div
-              style={{
-                display: 'flex',
-                gap: '16px',
-                flexWrap: 'wrap',
-                marginTop: '14px',
-                fontSize: '0.75rem',
-                color: 'var(--text-muted)'
-              }}
-            >
-
-              <span>
-                <strong style={{ color: 'var(--accent-emerald)' }}>
-                  |
-                </strong>
-                {' '}Identical
-              </span>
-
-              <span>
-                <strong style={{ color: 'var(--accent-rose)' }}>
-                  .
-                </strong>
-                {' '}Mismatch
-              </span>
-
-              <span>
-                <strong style={{ color: 'var(--accent-cyan)' }}>
-                  -
-                </strong>
-                {' '}Gap
-              </span>
-
-            </div>
-
           </div>
-
         </div>
-
       )}
-
     </div>
-
   );
-
 };
+
+  
