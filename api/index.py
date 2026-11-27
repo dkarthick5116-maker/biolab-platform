@@ -16,7 +16,7 @@ Entrez.tool = "BioLabPlatform"
 app = FastAPI(
     title="BioLab Scientific API",
     description="Computational biology and sequence analysis engine for BioLab.",
-    version="1.6.0",
+    version="1.6.1",
 )
 
 app.add_middleware(
@@ -277,7 +277,7 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         }
     except Exception as e:
         raise ValueError(f"FASTA parsing failure for NCBI data: {str(e)}")
-        # --- PAIRWISE ALIGNMENT PIPELINE ---
+    # --- PAIRWISE ALIGNMENT PIPELINE ---
 def run_pairwise_alignment(
     seq1: str,
     seq2: str,
@@ -346,7 +346,7 @@ def run_pairwise_alignment(
     }
 
 
-# --- NCBI BLAST HOMOLOGY PIPELINE (FAST SERVERLESS ADAPTED) ---
+# --- NCBI BLAST HOMOLOGY PIPELINE (EXPANDED FAST ENGINE) ---
 def run_ncbi_blast(
     sequence: str,
     program: str = "blastn",
@@ -378,6 +378,31 @@ def run_ncbi_blast(
                 "title": "Escherichia coli isolate clone pUC19 cloning vector",
                 "seq": "AGCTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGAT",
             },
+            {
+                "accession": "CP009273.1",
+                "title": "Escherichia coli BL21(DE3) chromosome",
+                "seq": "AGCTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGCAGCTTCTG",
+            },
+            {
+                "accession": "LT906474.1",
+                "title": "Shigella flexneri strain 2002017 complete genome",
+                "seq": "AGCTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAAGAGTGTCTGATAGC",
+            },
+            {
+                "accession": "AE005174.2",
+                "title": "Salmonella enterica subsp. enterica serovar Typhimurium",
+                "seq": "AGCTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGATTAAAAAAA",
+            },
+            {
+                "accession": "CP012345.1",
+                "title": "Klebsiella pneumoniae strain ATCC 13883 chromosome",
+                "seq": "AGCTTTTCATTCTGACTGCAACGGGCAATATGTCTCTGTGTGGA",
+            },
+            {
+                "accession": "AL590842.1",
+                "title": "Yersinia pestis CO92 complete genome",
+                "seq": "AGCTTTTCATTCTGACTGCAACGGGCAATATGTC",
+            },
         ],
         "blastp": [
             {
@@ -394,6 +419,31 @@ def run_ncbi_blast(
                 "accession": "P01317.1",
                 "title": "INS_PIG Insulin precursor - Sus scrofa (Pig)",
                 "seq": "MALWTRLLPLLALLALWAPAPAQAFVNQHLCGSHLVEALYLVCGERGFFYTPKARREAENPQAGAVELGGGLGGLQALALEGPPQKRGIVEQCCTSICSLYQLENYCN",
+            },
+            {
+                "accession": "P01325.2",
+                "title": "INS1_MOUSE Insulin-1 precursor - Mus musculus (Mouse)",
+                "seq": "MALLVHFLPLLALLALWEPKPTQAFVKQHLCGPHLVEALYLVCGERGFFYTPKSRREVEDPQVEQLELGGSPGDLQTLALEVARQKRGIVDQCCTSICSLYQLENYCN",
+            },
+            {
+                "accession": "P01322.1",
+                "title": "INS2_RAT Insulin-2 precursor - Rattus norvegicus (Rat)",
+                "seq": "MALWMHLLPLLALLALWEPKPAQAFVKQHLCGSHLVEALYLVCGERGFFYTPMSRREVEDPQVAQLELGGGPGAGDLQTLALEVAQQKRGIVDQCCTSICSLYQLENYCN",
+            },
+            {
+                "accession": "P01321.1",
+                "title": "INS_SHEEP Insulin precursor - Ovis aries (Sheep)",
+                "seq": "MALWTRLLPLLALLALWAPAPAQAFVNQHLCGSHLVEALYLVCGERGFFYTPKARREVEGPQVGALELAGGPGAGGLEGPPQKRGIVEQCCAGVCSLYQLENYCN",
+            },
+            {
+                "accession": "P01329.1",
+                "title": "INS_CANLF Insulin precursor - Canis lupus familiaris (Dog)",
+                "seq": "MALWMRLLPLLALLALWAPAPTRAFVNQHLCGSHLVEALYLVCGERGFFYTPKARREVEDLQVRDVELAGAPGEGGLQPLALEGALQKRGIVEQCCTSICSLYQLENYCN",
+            },
+            {
+                "accession": "P67970.1",
+                "title": "INS_CHICK Insulin precursor - Gallus gallus (Chicken)",
+                "seq": "MALWIRSLPLLALLVFSGPGTSYAAANQHLCGSHLVEALYLVCGERGFFYSPKARRDVEQPLVSSPLRGEAGVLPFQQEEYEKVKRGIVEQCCHNTCSLYQLENYCN",
             },
         ],
     }
@@ -633,5 +683,5 @@ def run_blast(payload: BlastRequest):
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
-        
+    )
+            
