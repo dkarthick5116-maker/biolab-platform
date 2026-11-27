@@ -10,13 +10,14 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+# NCBI Entrez identifier compliance
 Entrez.email = "biolab.researcher@biolab-platform.vercel.app"
 Entrez.tool = "BioLabPlatform"
 
 app = FastAPI(
     title="BioLab Scientific API",
     description="Computational biology and sequence analysis engine for BioLab.",
-    version="1.5.1",
+    version="1.5.2",
 )
 
 app.add_middleware(
@@ -59,7 +60,9 @@ def analyze_dna(raw_sequence: str) -> Dict[str, Any]:
         )
     if not VALID_DNA_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("ATGC")
-        raise ValueError(f"Invalid DNA characters detected: {', '.join(sorted(invalid_chars))}")
+        raise ValueError(
+            f"Invalid DNA characters detected: {', '.join(sorted(invalid_chars))}"
+        )
 
     seq_obj = Seq(cleaned_seq)
     seq_len = len(cleaned_seq)
@@ -93,7 +96,9 @@ def analyze_rna(raw_sequence: str) -> Dict[str, Any]:
         )
     if not VALID_RNA_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("AUGC")
-        raise ValueError(f"Invalid RNA characters detected: {', '.join(sorted(invalid_chars))}")
+        raise ValueError(
+            f"Invalid RNA characters detected: {', '.join(sorted(invalid_chars))}"
+        )
 
     seq_obj = Seq(cleaned_seq)
     seq_len = len(cleaned_seq)
@@ -133,7 +138,9 @@ def analyze_protein(raw_sequence: str) -> Dict[str, Any]:
         )
     if not VALID_PROTEIN_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("ACDEFGHIKLMNPQRSTVWY")
-        raise ValueError(f"Invalid amino acid characters: {', '.join(sorted(invalid_chars))}")
+        raise ValueError(
+            f"Invalid amino acid characters: {', '.join(sorted(invalid_chars))}"
+        )
 
     analysis = ProteinAnalysis(cleaned_seq)
     seq_len = len(cleaned_seq)
@@ -147,7 +154,9 @@ def analyze_protein(raw_sequence: str) -> Dict[str, Any]:
         "isoelectric_point": round(analysis.isoelectric_point(), 2),
         "charge_at_ph_7_4": round(analysis.charge_at_pH(7.4), 2),
         "instability_index": instability,
-        "stability_status": ("Stable (<= 40)" if instability <= 40 else "Unstable (> 40)"),
+        "stability_status": (
+            "Stable (<= 40)" if instability <= 40 else "Unstable (> 40)"
+        ),
         "aromaticity": round(analysis.aromaticity() * 100, 2),
         "gravy": round(analysis.gravy(), 3),
         "secondary_structure": {
@@ -186,7 +195,9 @@ def parse_fasta_content(content: str) -> Dict[str, Any]:
         if seq_type in ("DNA", "RNA"):
             gc_count = seq_str.count("G") + seq_str.count("C")
             entry["metric_label"] = "GC Content"
-            entry["metric_value"] = f"{round((gc_count / seq_len) * 100, 1)}%" if seq_len > 0 else "0%"
+            entry["metric_value"] = (
+                f"{round((gc_count / seq_len) * 100, 1)}%" if seq_len > 0 else "0%"
+            )
         elif seq_type == "Protein":
             try:
                 pa = ProteinAnalysis(seq_str)
@@ -229,14 +240,18 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         raise ValueError("Accession identifier cannot be empty.")
 
     try:
-        handle = Entrez.efetch(db=clean_db, id=clean_id, rettype="fasta", retmode="text")
+        handle = Entrez.efetch(
+            db=clean_db, id=clean_id, rettype="fasta", retmode="text"
+        )
         fasta_str = handle.read()
         handle.close()
     except Exception as e:
         raise ValueError(f"NCBI Entrez network request failed: {str(e)}")
 
     if not fasta_str or not fasta_str.strip():
-        raise ValueError(f"NCBI returned empty data for accession: '{clean_id}'.")
+        raise ValueError(
+            f"NCBI returned empty data for accession: '{clean_id}'."
+        )
 
     if not fasta_str.strip().startswith(">"):
         raise ValueError(f"NCBI returned non-FASTA response: {fasta_str[:160]}")
@@ -245,7 +260,9 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         record_handle = io.StringIO(fasta_str.strip())
         seq_records = list(SeqIO.parse(record_handle, "fasta"))
         if not seq_records:
-            raise ValueError(f"Unable to parse sequence from FASTA output for '{clean_id}'.")
+            raise ValueError(
+                f"Unable to parse sequence from FASTA output for '{clean_id}'."
+            )
 
         seq_record = seq_records[0]
         seq_str = str(seq_record.seq).upper()
@@ -261,9 +278,7 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         }
     except Exception as e:
         raise ValueError(f"FASTA parsing failure for NCBI data: {str(e)}")
-
-
-# --- PAIRWISE ALIGNMENT PIPELINE ---
+    # --- PAIRWISE ALIGNMENT PIPELINE ---
 def run_pairwise_alignment(
     seq1: str,
     seq2: str,
@@ -311,11 +326,15 @@ def run_pairwise_alignment(
 
     total_aligned = len(aligned_seq1)
     matches = match_line.count("|")
-    identity = round((matches / total_aligned) * 100, 2) if total_aligned > 0 else 0.0
+    identity = (
+        round((matches / total_aligned) * 100, 2) if total_aligned > 0 else 0.0
+    )
 
     return {
         "algorithm": (
-            "Needleman-Wunsch (Global)" if aligner.mode == "global" else "Smith-Waterman (Local)"
+            "Needleman-Wunsch (Global)"
+            if aligner.mode == "global"
+            else "Smith-Waterman (Local)"
         ),
         "score": round(float(best_alignment.score), 2),
         "identity_percent": identity,
@@ -332,7 +351,7 @@ def run_pairwise_alignment(
 def run_ncbi_blast(
     sequence: str,
     program: str = "blastn",
-    database: str = "nt",
+    database: str = "refseq_select_rna",
     expect: float = 10.0,
     hitlist_size: int = 10,
 ) -> Dict[str, Any]:
@@ -343,25 +362,25 @@ def run_ncbi_blast(
     if prog not in ("blastn", "blastp"):
         raise ValueError("Program must be either 'blastn' or 'blastp'.")
 
-    # Fast default database and parameters to prevent QBLAST queue hang
+    # Fast default database mappings to protect serverless quotas
+    if prog == "blastn":
+        if db in ("nt", "default", "standard"):
+            db = "refseq_select_rna"
+    elif prog == "blastp":
+        if db in ("nr", "default", "standard", "protein"):
+            db = "swissprot"
+
     qblast_kwargs: Dict[str, Any] = {
         "program": prog,
+        "database": db,
         "sequence": clean_seq,
         "expect": float(expect),
         "hitlist_size": int(hitlist_size),
     }
 
     if prog == "blastp":
-        # swissprot is significantly faster and curated compared to nr
-        if db in ("nr", "nt", "protein", "default"):
-            db = "swissprot"
-        qblast_kwargs["database"] = db
         qblast_kwargs["matrix_name"] = "BLOSUM62"
         qblast_kwargs["gapcosts"] = "11 1"
-    else:
-        if db in ("swissprot", "nr", "protein", "default"):
-            db = "nt"
-        qblast_kwargs["database"] = db
 
     try:
         result_handle = NCBIWWW.qblast(**qblast_kwargs)
@@ -371,7 +390,9 @@ def run_ncbi_blast(
         raise ValueError(f"NCBI BLAST web request failed: {str(e)}")
 
     if not raw_xml or not raw_xml.strip():
-        raise ValueError("NCBI BLAST returned an empty response. The server may be congested.")
+        raise ValueError(
+            "NCBI BLAST returned an empty response. Server may be congested."
+        )
 
     try:
         xml_stream = io.StringIO(raw_xml)
@@ -427,7 +448,7 @@ def run_ncbi_blast(
     }
 
 
-# --- REQUEST SCHEMAS ---
+# --- REQUEST SCHEMAS (Pydantic v1 & v2 compatible) ---
 class SequenceRequest(BaseModel):
     sequence: str = Field(..., min_length=1, max_length=100_000)
 
@@ -454,7 +475,7 @@ class AlignmentRequest(BaseModel):
 class BlastRequest(BaseModel):
     sequence: str = Field(..., min_length=10, max_length=10_000)
     program: str = "blastn"
-    database: str = "nt"
+    database: str = "refseq_select_rna"
     expect: float = 10.0
     hitlist_size: int = 10
 
@@ -466,7 +487,15 @@ def health_check():
         "status": "healthy",
         "engine": "Biopython PairwiseAligner, ProtParam & NCBIWWW",
         "service": "active",
-        "modules": ["DNA", "RNA", "Protein", "FASTA", "NCBI", "Alignment", "BLAST"],
+        "modules": [
+            "DNA",
+            "RNA",
+            "Protein",
+            "FASTA",
+            "NCBI",
+            "Alignment",
+            "BLAST",
+        ],
     }
 
 
@@ -475,9 +504,13 @@ def run_dna(payload: SequenceRequest):
     try:
         return {"success": True, "data": analyze_dna(payload.sequence)}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.post("/api/analyze/rna")
@@ -485,9 +518,13 @@ def run_rna(payload: SequenceRequest):
     try:
         return {"success": True, "data": analyze_rna(payload.sequence)}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.post("/api/analyze/protein")
@@ -495,19 +532,30 @@ def run_protein(payload: SequenceRequest):
     try:
         return {"success": True, "data": analyze_protein(payload.sequence)}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.post("/api/analyze/fasta")
 def run_fasta(payload: FastaRequest):
     try:
-        return {"success": True, "data": parse_fasta_content(payload.fasta_content)}
+        return {
+            "success": True,
+            "data": parse_fasta_content(payload.fasta_content),
+        }
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.post("/api/ncbi/fetch")
@@ -515,9 +563,13 @@ def run_ncbi(payload: NcbiFetchRequest):
     try:
         return {"success": True, "data": ncbi_fetch(payload.db, payload.id)}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.post("/api/align/pairwise")
@@ -534,9 +586,13 @@ def run_pairwise(payload: AlignmentRequest):
         )
         return {"success": True, "data": results}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @app.post("/api/blast/run")
@@ -551,7 +607,11 @@ def run_blast(payload: BlastRequest):
         )
         return {"success": True, "data": results}
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+            
