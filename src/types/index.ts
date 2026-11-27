@@ -22,7 +22,7 @@ export type ActivePage =
   | 'protein'
   | 'fasta'
   | 'alignment'
-  | 'database'
+  | 'ncbi'
   | 'blast'
   | 'visualization'
   | 'workspace'
