@@ -13,6 +13,7 @@ import { ProfilePage } from './pages/ProfilePage';
 import { DnaAnalyzerPage } from './pages/DnaAnalyzerPage';
 import { RnaAnalyzerPage } from './pages/RnaAnalyzerPage';
 import { ProteinAnalyzerPage } from './pages/ProteinAnalyzerPage';
+import { FastaAnalyzerPage } from './pages/FastaAnalyzerPage';
 import { PlaceholderModule } from './pages/PlaceholderModule';
 
 export const AppContent: React.FC = () => {
@@ -52,8 +53,10 @@ export const AppContent: React.FC = () => {
       case 'rna':
         return <RnaAnalyzerPage onNavigate={handleNavigate} />;
       case 'protein':
-  return <ProteinAnalyzerPage onNavigate={handleNavigate} />;
-      default:
+        return <ProteinAnalyzerPage onNavigate={handleNavigate} />;
+      case 'fasta':
+        return <FastaAnalyzerPage onNavigate={handleNavigate} />;
+          default:
         return <PlaceholderModule pageId={currentPage} onNavigate={handleNavigate} />;
     
       }
