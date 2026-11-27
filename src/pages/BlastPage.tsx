@@ -46,7 +46,7 @@ const SAMPLE_PROTEIN = 'MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTR'
 export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
   const [sequence, setSequence] = useState<string>(SAMPLE_NUCLEOTIDE);
   const [program, setProgram] = useState<'blastn' | 'blastp'>('blastn');
-  const [database, setDatabase] = useState<string>('nt');
+  const [database, setDatabase] = useState<string>('refseq_select_rna');
   const [expect, setExpect] = useState<number>(10.0);
   const [hitlistSize, setHitlistSize] = useState<number>(10);
 
@@ -77,7 +77,7 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
     setProgram(newProg);
     if (newProg === 'blastn') {
       setSequence(SAMPLE_NUCLEOTIDE);
-      setDatabase('nt');
+      setDatabase('refseq_select_rna');
     } else {
       setSequence(SAMPLE_PROTEIN);
       setDatabase('swissprot');
@@ -98,7 +98,7 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
     setResult(null);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 65000); // 65-second client protection
+    const timeoutId = setTimeout(() => controller.abort(), 120000); // 120-second threshold
 
     try {
       const response = await fetch('/api/blast/run', {
@@ -135,7 +135,9 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
     } catch (err: unknown) {
       if (err instanceof Error) {
         if (err.name === 'AbortError') {
-          setError('Search timed out after 60 seconds. NCBI public servers are overloaded. Try again with a shorter sequence or Swiss-Prot database.');
+          setError(
+            'Search timed out after 120 seconds. NCBI public servers are overloaded. Try using the curated Swiss-Prot (blastp) or RefSeq Select (blastn) database.'
+          );
         } else {
           setError(err.message);
         }
@@ -153,8 +155,7 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
-
-  return (
+        return (
     <div style={{ maxWidth: '960px', margin: '20px auto', padding: '0 16px', width: '100%' }}>
       <button
         type="button"
@@ -281,13 +282,13 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
             >
               {program === 'blastn' ? (
                 <>
-                  <option value="nt">nt (Standard Nucleotide)</option>
-                  <option value="refseq_select_rna">RefSeq Select RNA</option>
+                  <option value="refseq_select_rna">RefSeq Select RNA (Fast, Recommended)</option>
+                  <option value="nt">nt (Standard Nucleotide - Slower)</option>
                 </>
               ) : (
                 <>
                   <option value="swissprot">UniProtKB / Swiss-Prot (Fast, Recommended)</option>
-                  <option value="nr">nr (Non-redundant, Slower)</option>
+                  <option value="nr">nr (Non-redundant - Slower)</option>
                 </>
               )}
             </select>
@@ -480,4 +481,4 @@ Sbjct  1  ${hit.sbjct_alignment}  ${hit.align_length}`}
     </div>
   );
 };
-          
+        
