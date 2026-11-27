@@ -1,7 +1,9 @@
+import io
 import re
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqUtils import gc_fraction
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
@@ -9,7 +11,7 @@ from Bio.SeqUtils.ProtParam import ProteinAnalysis
 app = FastAPI(
     title="BioLab Scientific API",
     description="Computational biology and sequence analysis engine for BioLab.",
-    version="1.1.0"
+    version="1.2.0"
 )
 
 app.add_middleware(
@@ -21,9 +23,23 @@ app.add_middleware(
 )
 
 MAX_SEQUENCE_LENGTH = 100_000
+MAX_FASTA_ENTRIES = 100
 VALID_DNA_REGEX = re.compile(r"^[ATGC]+$")
 VALID_RNA_REGEX = re.compile(r"^[AUGC]+$")
 VALID_PROTEIN_REGEX = re.compile(r"^[ACDEFGHIKLMNPQRSTVWY]+$")
+
+# --- SEQUENCE TYPE DETECTOR ---
+def detect_sequence_type(seq: str) -> str:
+    cleaned = "".join(seq.split()).upper()
+    if not cleaned:
+        return "Unknown"
+    if VALID_DNA_REGEX.match(cleaned):
+        return "DNA"
+    if VALID_RNA_REGEX.match(cleaned):
+        return "RNA"
+    if VALID_PROTEIN_REGEX.match(cleaned):
+        return "Protein"
+    return "Ambiguous/Other"
 
 # --- DNA PIPELINE ---
 def analyze_dna(raw_sequence: str) -> dict:
@@ -38,10 +54,8 @@ def analyze_dna(raw_sequence: str) -> dict:
 
     seq_obj = Seq(cleaned_seq)
     seq_len = len(cleaned_seq)
-
     gc_ratio = gc_fraction(seq_obj)
     gc_percent = round(gc_ratio * 100, 2)
-    at_percent = round(100.0 - gc_percent, 2)
 
     return {
         "sequence": cleaned_seq,
@@ -53,7 +67,7 @@ def analyze_dna(raw_sequence: str) -> dict:
             "C": cleaned_seq.count("C")
         },
         "gc_content": gc_percent,
-        "at_content": at_percent,
+        "at_content": round(100.0 - gc_percent, 2),
         "reverse_complement": str(seq_obj.reverse_complement()),
         "rna_transcript": str(seq_obj.transcribe())
     }
@@ -108,8 +122,6 @@ def analyze_protein(raw_sequence: str) -> dict:
 
     analysis = ProteinAnalysis(cleaned_seq)
     seq_len = len(cleaned_seq)
-
-    # Secondary structure fraction tuple: (Helix, Turn, Sheet)
     sec_struct = analysis.secondary_structure_fraction()
     instability = round(analysis.instability_index(), 2)
 
@@ -131,21 +143,77 @@ def analyze_protein(raw_sequence: str) -> dict:
         "amino_acid_counts": analysis.count_amino_acids()
     }
 
+# --- FASTA PARSER PIPELINE ---
+def parse_fasta_content(content: str) -> dict:
+    if not content.strip():
+        raise ValueError("FASTA content cannot be empty.")
+
+    handle = io.StringIO(content.strip())
+    records = []
+    
+    for record in SeqIO.parse(handle, "fasta"):
+        if len(records) >= MAX_FASTA_ENTRIES:
+            break
+
+        seq_str = str(record.seq).upper()
+        seq_type = detect_sequence_type(seq_str)
+        seq_len = len(seq_str)
+
+        entry = {
+            "id": record.id,
+            "description": record.description,
+            "length": seq_len,
+            "type": seq_type,
+            "sequence": seq_str[:200] + ("..." if seq_len > 200 else "")
+        }
+
+        if seq_type in ("DNA", "RNA"):
+            gc_count = seq_str.count("G") + seq_str.count("C")
+            entry["metric_label"] = "GC Content"
+            entry["metric_value"] = f"{round((gc_count / seq_len) * 100, 1)}%" if seq_len > 0 else "0%"
+        elif seq_type == "Protein":
+            try:
+                pa = ProteinAnalysis(seq_str)
+                entry["metric_label"] = "pI"
+                entry["metric_value"] = f"{round(pa.isoelectric_point(), 2)}"
+            except Exception:
+                entry["metric_label"] = "pI"
+                entry["metric_value"] = "N/A"
+        else:
+            entry["metric_label"] = "Status"
+            entry["metric_value"] = "Ambiguous"
+
+        records.append(entry)
+
+    if not records:
+        raise ValueError("No valid FASTA records found. Headers must start with '>' followed by a sequence.")
+
+    total_len = sum(r["length"] for r in records)
+    type_counts = {}
+    for r in records:
+        type_counts[r["type"]] = type_counts.get(r["type"], 0) + 1
+
+    return {
+        "record_count": len(records),
+        "total_length": total_len,
+        "avg_length": round(total_len / len(records), 1),
+        "type_distribution": type_counts,
+        "records": records
+    }
+
 class SequenceRequest(BaseModel):
-    sequence: str = Field(
-        ...,
-        min_length=1,
-        max_length=100_000,
-        description="Biological sequence string"
-    )
+    sequence: str = Field(..., min_length=1, max_length=100_000)
+
+class FastaRequest(BaseModel):
+    fasta_content: str = Field(..., min_length=1, max_length=500_000)
 
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
-        "engine": "Biopython ProtParam",
+        "engine": "Biopython SeqIO & ProtParam",
         "service": "active",
-        "modules": ["DNA", "RNA", "Protein"]
+        "modules": ["DNA", "RNA", "Protein", "FASTA"]
     }
 
 @app.post("/api/analyze/dna")
@@ -172,6 +240,16 @@ def run_rna_analysis(payload: SequenceRequest):
 def run_protein_analysis(payload: SequenceRequest):
     try:
         results = analyze_protein(payload.sequence)
+        return {"success": True, "data": results}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Computation error: {str(e)}")
+
+@app.post("/api/analyze/fasta")
+def run_fasta_analysis(payload: FastaRequest):
+    try:
+        results = parse_fasta_content(payload.fasta_content)
         return {"success": True, "data": results}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
