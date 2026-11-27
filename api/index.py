@@ -3,15 +3,19 @@ import re
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from Bio import SeqIO
+from Bio import SeqIO, Entrez
 from Bio.Seq import Seq
 from Bio.SeqUtils import gc_fraction
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 
+# Set compliant Entrez identity
+Entrez.email = "biolab.researcher@example.com"
+Entrez.tool = "BioLabPlatform"
+
 app = FastAPI(
     title="BioLab Scientific API",
     description="Computational biology and sequence analysis engine for BioLab.",
-    version="1.2.0"
+    version="1.3.0"
 )
 
 app.add_middleware(
@@ -28,7 +32,6 @@ VALID_DNA_REGEX = re.compile(r"^[ATGC]+$")
 VALID_RNA_REGEX = re.compile(r"^[AUGC]+$")
 VALID_PROTEIN_REGEX = re.compile(r"^[ACDEFGHIKLMNPQRSTVWY]+$")
 
-# --- SEQUENCE TYPE DETECTOR ---
 def detect_sequence_type(seq: str) -> str:
     cleaned = "".join(seq.split()).upper()
     if not cleaned:
@@ -47,19 +50,18 @@ def analyze_dna(raw_sequence: str) -> dict:
     if not cleaned_seq:
         raise ValueError("Sequence cannot be empty.")
     if len(cleaned_seq) > MAX_SEQUENCE_LENGTH:
-        raise ValueError(f"Sequence length ({len(cleaned_seq)}) exceeds limit of {MAX_SEQUENCE_LENGTH} bases.")
+        raise ValueError(f"Sequence length exceeds limit of {MAX_SEQUENCE_LENGTH} bases.")
     if not VALID_DNA_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("ATGC")
-        raise ValueError(f"Invalid DNA nucleotide characters detected: {', '.join(sorted(invalid_chars))}")
+        raise ValueError(f"Invalid DNA characters detected: {', '.join(sorted(invalid_chars))}")
 
     seq_obj = Seq(cleaned_seq)
-    seq_len = len(cleaned_seq)
     gc_ratio = gc_fraction(seq_obj)
     gc_percent = round(gc_ratio * 100, 2)
 
     return {
         "sequence": cleaned_seq,
-        "length": seq_len,
+        "length": len(cleaned_seq),
         "counts": {
             "A": cleaned_seq.count("A"),
             "T": cleaned_seq.count("T"),
@@ -78,10 +80,10 @@ def analyze_rna(raw_sequence: str) -> dict:
     if not cleaned_seq:
         raise ValueError("RNA sequence cannot be empty.")
     if len(cleaned_seq) > MAX_SEQUENCE_LENGTH:
-        raise ValueError(f"Sequence length ({len(cleaned_seq)}) exceeds limit of {MAX_SEQUENCE_LENGTH} bases.")
+        raise ValueError(f"Sequence length exceeds limit of {MAX_SEQUENCE_LENGTH} bases.")
     if not VALID_RNA_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("AUGC")
-        raise ValueError(f"Invalid RNA nucleotide characters detected: {', '.join(sorted(invalid_chars))}")
+        raise ValueError(f"Invalid RNA characters detected: {', '.join(sorted(invalid_chars))}")
 
     seq_obj = Seq(cleaned_seq)
     seq_len = len(cleaned_seq)
@@ -91,7 +93,7 @@ def analyze_rna(raw_sequence: str) -> dict:
     try:
         protein_translation = str(seq_obj.translate(to_stop=False))
     except Exception:
-        protein_translation = "N/A (Incomplete codon frame)"
+        protein_translation = "N/A"
 
     return {
         "sequence": cleaned_seq,
@@ -115,19 +117,18 @@ def analyze_protein(raw_sequence: str) -> dict:
     if not cleaned_seq:
         raise ValueError("Protein sequence cannot be empty.")
     if len(cleaned_seq) > MAX_SEQUENCE_LENGTH:
-        raise ValueError(f"Sequence length ({len(cleaned_seq)}) exceeds limit of {MAX_SEQUENCE_LENGTH} residues.")
+        raise ValueError(f"Sequence length exceeds limit of {MAX_SEQUENCE_LENGTH} residues.")
     if not VALID_PROTEIN_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("ACDEFGHIKLMNPQRSTVWY")
-        raise ValueError(f"Invalid IUPAC amino acid characters detected: {', '.join(sorted(invalid_chars))}")
+        raise ValueError(f"Invalid amino acid characters: {', '.join(sorted(invalid_chars))}")
 
     analysis = ProteinAnalysis(cleaned_seq)
-    seq_len = len(cleaned_seq)
     sec_struct = analysis.secondary_structure_fraction()
     instability = round(analysis.instability_index(), 2)
 
     return {
         "sequence": cleaned_seq,
-        "length": seq_len,
+        "length": len(cleaned_seq),
         "molecular_weight": round(analysis.molecular_weight(), 2),
         "isoelectric_point": round(analysis.isoelectric_point(), 2),
         "charge_at_ph_7_4": round(analysis.charge_at_pH(7.4), 2),
@@ -186,7 +187,7 @@ def parse_fasta_content(content: str) -> dict:
         records.append(entry)
 
     if not records:
-        raise ValueError("No valid FASTA records found. Headers must start with '>' followed by a sequence.")
+        raise ValueError("No valid FASTA records detected.")
 
     total_len = sum(r["length"] for r in records)
     type_counts = {}
@@ -201,58 +202,114 @@ def parse_fasta_content(content: str) -> dict:
         "records": records
     }
 
+# --- NCBI ENTREZ PIPELINE ---
+def ncbi_search(db_name: str, term: str, retmax: int = 5) -> list:
+    try:
+        handle = Entrez.esearch(db=db_name, term=term, retmax=retmax)
+        record = Entrez.read(handle)
+        handle.close()
+        return record.get("IdList", [])
+    except Exception as e:
+        raise ValueError(f"NCBI Search failed: {str(e)}")
+
+def ncbi_fetch(db_name: str, identifier: str) -> dict:
+    try:
+        handle = Entrez.efetch(db=db_name, id=identifier, rettype="fasta", retmode="text")
+        seq_record = SeqIO.read(handle, "fasta")
+        handle.close()
+
+        seq_str = str(seq_record.seq).upper()
+        detected_type = detect_sequence_type(seq_str)
+
+        return {
+            "id": seq_record.id,
+            "description": seq_record.description,
+            "database": db_name,
+            "length": len(seq_str),
+            "type": detected_type,
+            "sequence": seq_str
+        }
+    except Exception as e:
+        raise ValueError(f"NCBI Fetch failed for ID '{identifier}': {str(e)}")
+
+# --- REQUEST SCHEMAS ---
 class SequenceRequest(BaseModel):
     sequence: str = Field(..., min_length=1, max_length=100_000)
 
 class FastaRequest(BaseModel):
     fasta_content: str = Field(..., min_length=1, max_length=500_000)
 
+class NcbiSearchRequest(BaseModel):
+    db: str = Field(..., regex="^(nucleotide|protein)$")
+    term: str = Field(..., min_length=1, max_length=200)
+
+class NcbiFetchRequest(BaseModel):
+    db: str = Field(..., regex="^(nucleotide|protein)$")
+    id: str = Field(..., min_length=1, max_length=100)
+
+# --- ROUTES ---
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
-        "engine": "Biopython SeqIO & ProtParam",
+        "engine": "Biopython Entrez & ProtParam",
         "service": "active",
-        "modules": ["DNA", "RNA", "Protein", "FASTA"]
+        "modules": ["DNA", "RNA", "Protein", "FASTA", "NCBI"]
     }
 
 @app.post("/api/analyze/dna")
 def run_dna_analysis(payload: SequenceRequest):
     try:
-        results = analyze_dna(payload.sequence)
-        return {"success": True, "data": results}
+        return {"success": True, "data": analyze_dna(payload.sequence)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Computation error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/analyze/rna")
 def run_rna_analysis(payload: SequenceRequest):
     try:
-        results = analyze_rna(payload.sequence)
-        return {"success": True, "data": results}
+        return {"success": True, "data": analyze_rna(payload.sequence)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Computation error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/analyze/protein")
 def run_protein_analysis(payload: SequenceRequest):
     try:
-        results = analyze_protein(payload.sequence)
-        return {"success": True, "data": results}
+        return {"success": True, "data": analyze_protein(payload.sequence)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Computation error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/analyze/fasta")
 def run_fasta_analysis(payload: FastaRequest):
     try:
-        results = parse_fasta_content(payload.fasta_content)
-        return {"success": True, "data": results}
+        return {"success": True, "data": parse_fasta_content(payload.fasta_content)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Computation error: {str(e)}")
-        
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+@app.post("/api/ncbi/search")
+def run_ncbi_search(payload: NcbiSearchRequest):
+    try:
+        ids = ncbi_search(payload.db, payload.term)
+        return {"success": True, "ids": ids}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+@app.post("/api/ncbi/fetch")
+def run_ncbi_fetch(payload: NcbiFetchRequest):
+    try:
+        data = ncbi_fetch(payload.db, payload.id)
+        return {"success": True, "data": data}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    
