@@ -408,4 +408,106 @@ def run_pairwise(payload: AlignmentRequest):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    
+    from Bio.Blast import NCBIWWW, NCBIXML
+
+# --- BLAST REQUEST SCHEMA ---
+class BlastRequest(BaseModel):
+    sequence: str = Field(..., min_length=10, max_length=10_000)
+    program: str = "blastn"  # 'blastn' or 'blastp'
+    database: str = "nt"     # 'nt', 'refseq_select_rna', 'nr', 'swissprot'
+    expect: float = 10.0
+    hitlist_size: int = 10
+
+# --- BLAST EXECUTION PIPELINE ---
+def run_ncbi_blast(
+    sequence: str,
+    program: str = "blastn",
+    database: str = "nt",
+    expect: float = 10.0,
+    hitlist_size: int = 10
+) -> Dict[str, Any]:
+    clean_seq = "".join(sequence.split()).upper()
+    prog = program.lower().strip()
+    db = database.lower().strip()
+
+    if prog not in ("blastn", "blastp"):
+        raise ValueError("Program must be either 'blastn' or 'blastp'.")
+
+    # Default to fast, reliable databases if general names are passed
+    if prog == "blastp" and db in ("nt", "nucleotide"):
+        db = "swissprot"
+    elif prog == "blastn" and db in ("nr", "protein"):
+        db = "nt"
+
+    try:
+        # Submit query to NCBI BLAST web API
+        result_handle = NCBIWWW.qblast(
+            program=prog,
+            database=db,
+            sequence=clean_seq,
+            expect=expect,
+            hitlist_size=hitlist_size
+        )
+        blast_records = NCBIXML.parse(result_handle)
+        blast_record = next(blast_records, None)
+    except Exception as e:
+        raise ValueError(f"NCBI BLAST request failed: {str(e)}")
+
+    if not blast_record:
+        return {
+            "program": prog,
+            "database": db,
+            "query_length": len(clean_seq),
+            "hits": []
+        }
+
+    hits: List[Dict[str, Any]] = []
+
+    for alignment in blast_record.alignments:
+        if not alignment.hsps:
+            continue
+        hsp = alignment.hsps[0]  # Primary High-scoring Segment Pair
+
+        identity_pct = round((hsp.identities / hsp.align_length) * 100, 2) if hsp.align_length > 0 else 0.0
+
+        hits.append({
+            "accession": alignment.accession,
+            "title": alignment.title,
+            "length": alignment.length,
+            "e_value": float(hsp.expect),
+            "bit_score": round(float(hsp.bits), 1),
+            "score": float(hsp.score),
+            "identities": hsp.identities,
+            "align_length": hsp.align_length,
+            "identity_percent": identity_pct,
+            "gaps": hsp.gaps,
+            "query_alignment": hsp.query,
+            "match_line": hsp.match,
+            "sbjct_alignment": hsp.sbjct
+        })
+
+    return {
+        "program": prog,
+        "database": db,
+        "query_length": len(clean_seq),
+        "total_hits": len(hits),
+        "hits": hits
+    }
+
+# --- ADD ROUTE TO FastAPI ---
+@app.post("/api/blast/run")
+def run_blast(payload: BlastRequest):
+    try:
+        result = run_ncbi_blast(
+            sequence=payload.sequence,
+            program=payload.program,
+            database=payload.database,
+            expect=payload.expect,
+            hitlist_size=payload.hitlist_size
+        )
+        return {"success": True, "data": result}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        
