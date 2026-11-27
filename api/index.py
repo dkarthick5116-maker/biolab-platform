@@ -15,7 +15,7 @@ Entrez.tool = "BioLabPlatform"
 app = FastAPI(
     title="BioLab Scientific API",
     description="Computational biology and sequence analysis engine for BioLab.",
-    version="1.4.0"
+    version="1.4.1"
 )
 
 app.add_middleware(
@@ -60,7 +60,6 @@ def analyze_dna(raw_sequence: str) -> Dict[str, Any]:
     seq_len = len(cleaned_seq)
     gc_ratio = gc_fraction(seq_obj)
     gc_percent = round(gc_ratio * 100, 2)
-    at_percent = round(100.0 - gc_percent, 2)
 
     return {
         "sequence": cleaned_seq,
@@ -72,7 +71,7 @@ def analyze_dna(raw_sequence: str) -> Dict[str, Any]:
             "C": cleaned_seq.count("C")
         },
         "gc_content": gc_percent,
-        "at_content": at_percent,
+        "at_content": round(100.0 - gc_percent, 2),
         "reverse_complement": str(seq_obj.reverse_complement()),
         "rna_transcript": str(seq_obj.transcribe())
     }
@@ -83,7 +82,7 @@ def analyze_rna(raw_sequence: str) -> Dict[str, Any]:
     if not cleaned_seq:
         raise ValueError("RNA sequence cannot be empty.")
     if len(cleaned_seq) > MAX_SEQUENCE_LENGTH:
-        raise ValueError(f"Sequence length ({len(cleaned_seq)}) exceeds limit of {MAX_SEQUENCE_LENGTH} bases.")
+        raise ValueError(f"Sequence length exceeds limit of {MAX_SEQUENCE_LENGTH} bases.")
     if not VALID_RNA_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("AUGC")
         raise ValueError(f"Invalid RNA characters detected: {', '.join(sorted(invalid_chars))}")
@@ -120,7 +119,7 @@ def analyze_protein(raw_sequence: str) -> Dict[str, Any]:
     if not cleaned_seq:
         raise ValueError("Protein sequence cannot be empty.")
     if len(cleaned_seq) > MAX_SEQUENCE_LENGTH:
-        raise ValueError(f"Sequence length ({len(cleaned_seq)}) exceeds limit of {MAX_SEQUENCE_LENGTH} residues.")
+        raise ValueError(f"Sequence length exceeds limit of {MAX_SEQUENCE_LENGTH} residues.")
     if not VALID_PROTEIN_REGEX.match(cleaned_seq):
         invalid_chars = set(cleaned_seq) - set("ACDEFGHIKLMNPQRSTVWY")
         raise ValueError(f"Invalid amino acid characters: {', '.join(sorted(invalid_chars))}")
@@ -286,33 +285,35 @@ def run_pairwise_alignment(
     except IndexError:
         raise ValueError("No optimal alignment could be computed.")
 
-    alignment_str = format(best_alignment)
-    lines = alignment_str.strip().split("\n")
+    # In Biopython PairwiseAligner, best_alignment[0] and [1] are the exact gapped sequence strings
+    aligned_seq1 = str(best_alignment[0])
+    aligned_seq2 = str(best_alignment[1])
 
-    # Extract aligned strings and match identity
-    aligned_seq1 = ""
-    match_line = ""
-    aligned_seq2 = ""
-    if len(lines) >= 3:
-        aligned_seq1 = lines[0]
-        match_line = lines[1]
-        aligned_seq2 = lines[2]
+    # Construct the standard alignment match line
+    match_chars = []
+    for c1, c2 in zip(aligned_seq1, aligned_seq2):
+        if c1 == "-" or c2 == "-":
+            match_chars.append("-")
+        elif c1 == c2:
+            match_chars.append("|")
+        else:
+            match_chars.append(".")
+    match_line = "".join(match_chars)
 
-    # Calculate identity percentage
+    total_aligned = len(aligned_seq1)
     matches = match_line.count("|")
-    total_aligned = len(match_line) if match_line else max(len(s1), len(s2))
     identity = round((matches / total_aligned) * 100, 2) if total_aligned > 0 else 0.0
 
     return {
         "algorithm": "Needleman-Wunsch (Global)" if aligner.mode == "global" else "Smith-Waterman (Local)",
-        "score": round(best_alignment.score, 2),
+        "score": round(float(best_alignment.score), 2),
         "identity_percent": identity,
         "matches": matches,
         "alignment_length": total_aligned,
         "seq1_aligned": aligned_seq1,
         "match_line": match_line,
         "seq2_aligned": aligned_seq2,
-        "full_text": alignment_str
+        "full_text": format(best_alignment)
     }
 
 # --- REQUEST SCHEMAS ---
@@ -407,3 +408,4 @@ def run_pairwise(payload: AlignmentRequest):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    
