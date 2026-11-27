@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ActivePage } from '../types';
 import { 
   ArrowLeft, 
@@ -8,7 +8,8 @@ import {
   CheckCircle2, 
   Copy, 
   ChevronDown, 
-  ChevronUp 
+  ChevronUp,
+  Clock
 } from 'lucide-react';
 
 interface BlastPageProps {
@@ -50,10 +51,27 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
   const [hitlistSize, setHitlistSize] = useState<number>(10);
 
   const [loading, setLoading] = useState<boolean>(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BlastResultData | null>(null);
   const [expandedHit, setExpandedHit] = useState<number | null>(0);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (loading) {
+      setElapsedSeconds(0);
+      timerRef.current = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [loading]);
 
   const handleProgramChange = (newProg: 'blastn' | 'blastp') => {
     setProgram(newProg);
@@ -79,10 +97,14 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
     setError(null);
     setResult(null);
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 65000); // 65-second client protection
+
     try {
       const response = await fetch('/api/blast/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           sequence: cleanSeq,
           program,
@@ -92,9 +114,18 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
         })
       });
 
+      clearTimeout(timeoutId);
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error(
+          `Server timeout or non-JSON response (${response.status}). NCBI QBLAST servers may be under heavy load.`
+        );
+      }
+
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || data.message || `BLAST job error (${response.status})`);
+        throw new Error(data.detail || data.message || `BLAST error (${response.status})`);
       }
 
       setResult(data.data || data);
@@ -103,11 +134,16 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
-        setError(err.message);
+        if (err.name === 'AbortError') {
+          setError('Search timed out after 60 seconds. NCBI public servers are overloaded. Try again with a shorter sequence or Swiss-Prot database.');
+        } else {
+          setError(err.message);
+        }
       } else {
         setError('An unexpected error occurred while communicating with NCBI BLAST.');
       }
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -250,8 +286,8 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
                 </>
               ) : (
                 <>
-                  <option value="swissprot">UniProtKB / Swiss-Prot (Curated)</option>
-                  <option value="nr">nr (Non-redundant Protein)</option>
+                  <option value="swissprot">UniProtKB / Swiss-Prot (Fast, Recommended)</option>
+                  <option value="nr">nr (Non-redundant, Slower)</option>
                 </>
               )}
             </select>
@@ -288,7 +324,7 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             type="button"
             className="btn-primary"
@@ -296,7 +332,8 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
             onClick={handleRunBlast}
             style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
           >
-            <Search size={16} /> {loading ? 'Submitting to NCBI BLAST...' : 'Execute Remote BLAST'}
+            <Search size={16} /> 
+            {loading ? `Submitting to NCBI BLAST (${elapsedSeconds}s)...` : 'Execute Remote BLAST'}
           </button>
           <button
             type="button"
@@ -306,6 +343,12 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
           >
             <RotateCcw size={16} /> Reset
           </button>
+
+          {loading && (
+            <span style={{ fontSize: '0.78rem', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Clock size={14} /> NCBI QBLAST servers poll in intervals (15–40s avg).
+            </span>
+          )}
         </div>
       </div>
 
@@ -403,7 +446,6 @@ export const BlastPage: React.FC<BlastPageProps> = ({ onNavigate }) => {
                     </div>
                   </div>
 
-                  {/* Alignment snippet */}
                   {expandedHit === idx && (
                     <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '8px' }}>
@@ -438,4 +480,4 @@ Sbjct  1  ${hit.sbjct_alignment}  ${hit.align_length}`}
     </div>
   );
 };
-    
+          
