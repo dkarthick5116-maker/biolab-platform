@@ -4,19 +4,18 @@ from typing import Dict, Any, List
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from Bio import SeqIO, Entrez
+from Bio import SeqIO, Entrez, Align
 from Bio.Seq import Seq
 from Bio.SeqUtils import gc_fraction
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 
-# Set NCBI compliance headers
 Entrez.email = "biolab.researcher@biolab-platform.vercel.app"
 Entrez.tool = "BioLabPlatform"
 
 app = FastAPI(
     title="BioLab Scientific API",
     description="Computational biology and sequence analysis engine for BioLab.",
-    version="1.3.0"
+    version="1.4.0"
 )
 
 app.add_middleware(
@@ -28,12 +27,12 @@ app.add_middleware(
 )
 
 MAX_SEQUENCE_LENGTH = 100_000
+MAX_ALIGN_LENGTH = 10_000
 MAX_FASTA_ENTRIES = 100
 VALID_DNA_REGEX = re.compile(r"^[ATGC]+$")
 VALID_RNA_REGEX = re.compile(r"^[AUGC]+$")
 VALID_PROTEIN_REGEX = re.compile(r"^[ACDEFGHIKLMNPQRSTVWY]+$")
 
-# --- UTILITY: TYPE DETECTION ---
 def detect_sequence_type(seq: str) -> str:
     cleaned = "".join(seq.split()).upper()
     if not cleaned:
@@ -97,7 +96,7 @@ def analyze_rna(raw_sequence: str) -> Dict[str, Any]:
     try:
         protein_translation = str(seq_obj.translate(to_stop=False))
     except Exception:
-        protein_translation = "N/A (Sequence not divisible into complete codons)"
+        protein_translation = "N/A"
 
     return {
         "sequence": cleaned_seq,
@@ -192,7 +191,7 @@ def parse_fasta_content(content: str) -> Dict[str, Any]:
         records.append(entry)
 
     if not records:
-        raise ValueError("No valid FASTA records detected. Make sure lines start with '>' followed by sequence rows.")
+        raise ValueError("No valid FASTA records detected.")
 
     total_len = sum(r["length"] for r in records)
     type_counts: Dict[str, int] = {}
@@ -218,7 +217,6 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         raise ValueError("Accession identifier cannot be empty.")
 
     try:
-        # Fetch directly as plain FASTA text
         handle = Entrez.efetch(
             db=clean_db,
             id=clean_id,
@@ -231,7 +229,7 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         raise ValueError(f"NCBI Entrez network request failed: {str(e)}")
 
     if not fasta_str or not fasta_str.strip():
-        raise ValueError(f"NCBI returned empty data for accession: '{clean_id}'. Verify accession validity.")
+        raise ValueError(f"NCBI returned empty data for accession: '{clean_id}'.")
 
     if not fasta_str.strip().startswith(">"):
         raise ValueError(f"NCBI returned non-FASTA response: {fasta_str[:160]}")
@@ -240,7 +238,7 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
         record_handle = io.StringIO(fasta_str.strip())
         seq_records = list(SeqIO.parse(record_handle, "fasta"))
         if not seq_records:
-            raise ValueError(f"Unable to parse sequence from FASTA output for accession '{clean_id}'.")
+            raise ValueError(f"Unable to parse sequence from FASTA output for '{clean_id}'.")
 
         seq_record = seq_records[0]
         seq_str = str(seq_record.seq).upper()
@@ -257,7 +255,67 @@ def ncbi_fetch(db_name: str, identifier: str) -> Dict[str, Any]:
     except Exception as e:
         raise ValueError(f"FASTA parsing failure for NCBI data: {str(e)}")
 
-# --- REQUEST SCHEMAS (Pydantic v1 & v2 compatible) ---
+# --- PAIRWISE ALIGNMENT PIPELINE ---
+def run_pairwise_alignment(
+    seq1: str,
+    seq2: str,
+    mode: str = "global",
+    match_score: float = 2.0,
+    mismatch_score: float = -1.0,
+    open_gap_score: float = -2.0,
+    extend_gap_score: float = -0.5
+) -> Dict[str, Any]:
+    s1 = "".join(seq1.split()).upper()
+    s2 = "".join(seq2.split()).upper()
+
+    if not s1 or not s2:
+        raise ValueError("Both sequences must be provided.")
+    if len(s1) > MAX_ALIGN_LENGTH or len(s2) > MAX_ALIGN_LENGTH:
+        raise ValueError(f"Sequences exceed the maximum alignment limit of {MAX_ALIGN_LENGTH} characters.")
+
+    aligner = Align.PairwiseAligner()
+    aligner.mode = "local" if mode.lower() == "local" else "global"
+    aligner.match_score = float(match_score)
+    aligner.mismatch_score = float(mismatch_score)
+    aligner.open_gap_score = float(open_gap_score)
+    aligner.extend_gap_score = float(extend_gap_score)
+
+    alignments = aligner.align(s1, s2)
+    try:
+        best_alignment = alignments[0]
+    except IndexError:
+        raise ValueError("No optimal alignment could be computed.")
+
+    alignment_str = format(best_alignment)
+    lines = alignment_str.strip().split("\n")
+
+    # Extract aligned strings and match identity
+    aligned_seq1 = ""
+    match_line = ""
+    aligned_seq2 = ""
+    if len(lines) >= 3:
+        aligned_seq1 = lines[0]
+        match_line = lines[1]
+        aligned_seq2 = lines[2]
+
+    # Calculate identity percentage
+    matches = match_line.count("|")
+    total_aligned = len(match_line) if match_line else max(len(s1), len(s2))
+    identity = round((matches / total_aligned) * 100, 2) if total_aligned > 0 else 0.0
+
+    return {
+        "algorithm": "Needleman-Wunsch (Global)" if aligner.mode == "global" else "Smith-Waterman (Local)",
+        "score": round(best_alignment.score, 2),
+        "identity_percent": identity,
+        "matches": matches,
+        "alignment_length": total_aligned,
+        "seq1_aligned": aligned_seq1,
+        "match_line": match_line,
+        "seq2_aligned": aligned_seq2,
+        "full_text": alignment_str
+    }
+
+# --- REQUEST SCHEMAS ---
 class SequenceRequest(BaseModel):
     sequence: str = Field(..., min_length=1, max_length=100_000)
 
@@ -268,63 +326,84 @@ class NcbiFetchRequest(BaseModel):
     db: str
     id: str
 
-# --- ROUTES ---
+class AlignmentRequest(BaseModel):
+    seq1: str = Field(..., min_length=1, max_length=10_000)
+    seq2: str = Field(..., min_length=1, max_length=10_000)
+    mode: str = "global"
+    match_score: float = 2.0
+    mismatch_score: float = -1.0
+    open_gap_score: float = -2.0
+    extend_gap_score: float = -0.5
+
+# --- API ROUTES ---
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
-        "engine": "Biopython Entrez & ProtParam",
+        "engine": "Biopython PairwiseAligner & ProtParam",
         "service": "active",
-        "modules": ["DNA", "RNA", "Protein", "FASTA", "NCBI"]
+        "modules": ["DNA", "RNA", "Protein", "FASTA", "NCBI", "Alignment"]
     }
 
 @app.post("/api/analyze/dna")
-def run_dna_analysis(payload: SequenceRequest):
+def run_dna(payload: SequenceRequest):
     try:
-        results = analyze_dna(payload.sequence)
-        return {"success": True, "data": results}
+        return {"success": True, "data": analyze_dna(payload.sequence)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/analyze/rna")
-def run_rna_analysis(payload: SequenceRequest):
+def run_rna(payload: SequenceRequest):
     try:
-        results = analyze_rna(payload.sequence)
-        return {"success": True, "data": results}
+        return {"success": True, "data": analyze_rna(payload.sequence)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/analyze/protein")
-def run_protein_analysis(payload: SequenceRequest):
+def run_protein(payload: SequenceRequest):
     try:
-        results = analyze_protein(payload.sequence)
-        return {"success": True, "data": results}
+        return {"success": True, "data": analyze_protein(payload.sequence)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/analyze/fasta")
-def run_fasta_analysis(payload: FastaRequest):
+def run_fasta(payload: FastaRequest):
     try:
-        results = parse_fasta_content(payload.fasta_content)
-        return {"success": True, "data": results}
+        return {"success": True, "data": parse_fasta_content(payload.fasta_content)}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @app.post("/api/ncbi/fetch")
-def run_ncbi_fetch(payload: NcbiFetchRequest):
+def run_ncbi(payload: NcbiFetchRequest):
     try:
-        results = ncbi_fetch(payload.db, payload.id)
+        return {"success": True, "data": ncbi_fetch(payload.db, payload.id)}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+@app.post("/api/align/pairwise")
+def run_pairwise(payload: AlignmentRequest):
+    try:
+        results = run_pairwise_alignment(
+            payload.seq1,
+            payload.seq2,
+            payload.mode,
+            payload.match_score,
+            payload.mismatch_score,
+            payload.open_gap_score,
+            payload.extend_gap_score
+        )
         return {"success": True, "data": results}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Server error: {str(e)}")
-    
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
