@@ -16,6 +16,7 @@ import { ProteinAnalyzerPage } from './pages/ProteinAnalyzerPage';
 import { FastaAnalyzerPage } from './pages/FastaAnalyzerPage';
 import { NcbiExplorerPage } from './pages/NcbiExplorerPage';
 import { AlignmentPage } from './pages/AlignmentPage';
+import { BlastPage } from './pages/BlastPage';
 import { PlaceholderModule } from './pages/PlaceholderModule';
 
 export const AppContent: React.FC = () => {
@@ -62,6 +63,8 @@ export const AppContent: React.FC = () => {
         return <NcbiExplorerPage onNavigate={handleNavigate} />;
       case 'alignment':
         return <AlignmentPage onNavigate={handleNavigate} />;
+      case 'blast':
+        return <BlastPage onNavigate={handleNavigate} />;
       default:
         return <PlaceholderModule pageId={currentPage} onNavigate={handleNavigate} />;
     
