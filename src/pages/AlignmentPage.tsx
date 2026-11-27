@@ -10,7 +10,9 @@ import {
   Copy, 
   CheckCircle2,
   Check,
-  Bookmark
+  Bookmark,
+  Download,
+  FileDown
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { saveAnalysisRun } from '../services/historyService';
@@ -34,10 +36,13 @@ interface BackendAlignmentData {
 interface AlignmentMetrics {
   algorithm: string;
   score: number;
+  targetLength: number;
+  queryLength: number;
   alignmentLength: number;
   identicalMatches: number;
   mismatches: number;
-  gapColumns: number;
+  gapPositions: number;
+  gapRuns: number;
   identityPercentage: number;
   seq1Aligned: string;
   matchLine: string;
@@ -55,7 +60,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
   const [seq2, setSeq2] = useState<string>(SAMPLE_DNA_2);
   const [mode, setMode] = useState<'global' | 'local'>('global');
 
-  // Scoring configuration state
+  // Scoring matrix parameters
   const [showConfig, setShowConfig] = useState<boolean>(false);
   const [matchScore, setMatchScore] = useState<number>(2.0);
   const [mismatchScore, setMismatchScore] = useState<number>(-1.0);
@@ -68,29 +73,43 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AlignmentMetrics | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
-    const computeClientMetrics = (data: BackendAlignmentData): AlignmentMetrics => {
+      const computeRigorousMetrics = (
+    data: BackendAlignmentData,
+    rawSeq1: string,
+    rawSeq2: string
+  ): AlignmentMetrics => {
     const s1 = data.seq1_aligned;
     const s2 = data.seq2_aligned;
 
     if (!s1 || !s2 || s1.length !== s2.length) {
-      throw new Error('Alignment data format mismatch: Aligned sequence row lengths are not equal.');
+      throw new Error('Alignment data format error: Sequence row lengths are unequal or missing.');
     }
 
     const alignmentLength = s1.length;
     let identicalMatches = 0;
     let mismatches = 0;
-    let gapColumns = 0;
+    let gapPositions = 0;
+    let gapRuns = 0;
+    let inGapRun = false;
 
     for (let i = 0; i < alignmentLength; i++) {
-      const char1 = s1[i];
-      const char2 = s2[i];
+      const c1 = s1[i];
+      const c2 = s2[i];
+      const isGap = c1 === '-' || c2 === '-';
 
-      if (char1 === '-' || char2 === '-') {
-        gapColumns++;
-      } else if (char1 === char2) {
-        identicalMatches++;
+      if (isGap) {
+        gapPositions++;
+        if (!inGapRun) {
+          gapRuns++;
+          inGapRun = true;
+        }
       } else {
-        mismatches++;
+        inGapRun = false;
+        if (c1 === c2) {
+          identicalMatches++;
+        } else {
+          mismatches++;
+        }
       }
     }
 
@@ -101,10 +120,13 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
     return {
       algorithm: data.algorithm,
       score: data.score,
+      targetLength: rawSeq1.length,
+      queryLength: rawSeq2.length,
       alignmentLength,
       identicalMatches,
       mismatches,
-      gapColumns,
+      gapPositions,
+      gapRuns,
       identityPercentage,
       seq1Aligned: s1,
       matchLine: data.match_line,
@@ -163,7 +185,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
       }
 
       const backendPayload: BackendAlignmentData = data.data || data;
-      const metrics = computeClientMetrics(backendPayload);
+      const metrics = computeRigorousMetrics(backendPayload, cleanSeq1, cleanSeq2);
       setResult(metrics);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -174,6 +196,70 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleExportFasta = () => {
+    if (!result) return;
+    const fastaContent = 
+`>target_aligned | Algorithm: ${result.algorithm} | Length: ${result.alignmentLength} | Score: ${result.score}
+${result.seq1Aligned}
+>query_aligned | Identity: ${result.identityPercentage}% | Matches: ${result.identicalMatches}
+${result.seq2Aligned}
+`;
+    const blob = new Blob([fastaContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `alignment_${mode}_${Date.now()}.fasta`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportJson = () => {
+    if (!result) return;
+    const jsonContent = JSON.stringify({
+      metadata: {
+        timestamp: new Date().toISOString(),
+        engine: 'Biopython Bio.Align.PairwiseAligner',
+        algorithm: result.algorithm,
+        mode
+      },
+      parameters: {
+        matchScore,
+        mismatchScore,
+        gapOpenScore,
+        gapExtendScore
+      },
+      statistics: {
+        score: result.score,
+        targetLength: result.targetLength,
+        queryLength: result.queryLength,
+        alignmentLength: result.alignmentLength,
+        identicalMatches: result.identicalMatches,
+        mismatches: result.mismatches,
+        gapPositions: result.gapPositions,
+        gapRuns: result.gapRuns,
+        identityPercentage: result.identityPercentage
+      },
+      alignment: {
+        targetAligned: result.seq1Aligned,
+        matchLine: result.matchLine,
+        queryAligned: result.seq2Aligned,
+        fullFormattedText: result.fullText
+      }
+    }, null, 2);
+
+    const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `alignment_${mode}_${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const handleCopyAlignment = async () => {
@@ -206,7 +292,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
     try {
       await saveAnalysisRun(currentUser.uid, {
         module: 'Alignment' as unknown as 'DNA',
-        sequence: `${seq1.trim().substring(0, 30)}... vs ${seq2.trim().substring(0, 30)}...`,
+        sequence: `${seq1.trim().substring(0, 24)}... vs ${seq2.trim().substring(0, 24)}...`,
         length: result.alignmentLength,
         gcContent: result.identityPercentage,
         secondaryMetric: {
@@ -229,7 +315,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
       setSaving(false);
     }
   };
-    return (
+      return (
     <div style={{ maxWidth: '960px', margin: '20px auto', padding: '0 16px', width: '100%' }}>
       <button
         type="button"
@@ -285,7 +371,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* Sequence Input and Parameters */}
+      {/* Input Section */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
         <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
           <button
@@ -314,7 +400,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
           </button>
         </div>
 
-        {/* Scoring Matrix Parameters */}
+        {/* Scoring Matrix Sliders */}
         {showConfig && (
           <div
             style={{
@@ -387,9 +473,14 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
         )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
           <div>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
-              Sequence 1 (Target / Reference)
-            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Sequence 1 (Target / Reference)
+              </label>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                {seq1.replace(/\s+/g, '').length} bp
+              </span>
+            </div>
             <textarea
               rows={4}
               value={seq1}
@@ -411,9 +502,14 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
           </div>
 
           <div>
-            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>
-              Sequence 2 (Query / Variant)
-            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Sequence 2 (Query / Variant)
+              </label>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                {seq2.replace(/\s+/g, '').length} bp
+              </span>
+            </div>
             <textarea
               rows={4}
               value={seq2}
@@ -464,7 +560,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
             {/* Results View */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Action Bar */}
+          {/* Action Bar with Exports */}
           <div
             className="glass-panel"
             style={{
@@ -481,7 +577,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
                 {result.algorithm} Complete
               </span>
               <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                Aligned string length: {result.alignmentLength} positions
+                Aligned string length: {result.alignmentLength} positions (Target: {result.targetLength}, Query: {result.queryLength})
               </p>
             </div>
 
@@ -493,7 +589,25 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
                 style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
               >
                 {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                {copied ? 'Copied Full Output' : 'Copy Alignment'}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportFasta}
+                className="btn-secondary"
+                style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Download size={14} /> FASTA
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportJson}
+                className="btn-secondary"
+                style={{ fontSize: '0.8rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <FileDown size={14} /> JSON
               </button>
 
               {currentUser ? (
@@ -512,7 +626,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
                   }}
                 >
                   {savedSuccess ? <Check size={14} /> : <Bookmark size={14} />}
-                  {savedSuccess ? 'Saved to Notebook' : saving ? 'Saving...' : 'Save to Notebook'}
+                  {savedSuccess ? 'Saved' : saving ? 'Saving...' : 'Save Run'}
                 </button>
               ) : (
                 <button
@@ -527,8 +641,8 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
             </div>
           </div>
 
-          {/* Statistics Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '14px' }}>
+          {/* Statistical Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '14px' }}>
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Alignment Score</span>
               <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
@@ -546,26 +660,26 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Identical Matches</span>
               <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-violet)' }}>
-                {result.identicalMatches} <span style={{ fontSize: '0.8rem', fontWeight: 400 }}>columns</span>
+                {result.identicalMatches} <span style={{ fontSize: '0.75rem', fontWeight: 400 }}>columns</span>
               </span>
             </div>
 
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Mismatches</span>
               <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-amber, #f59e0b)' }}>
-                {result.mismatches} <span style={{ fontSize: '0.8rem', fontWeight: 400 }}>positions</span>
+                {result.mismatches} <span style={{ fontSize: '0.75rem', fontWeight: 400 }}>positions</span>
               </span>
             </div>
 
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Gaps Inserted</span>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Gap Positions</span>
               <span style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--accent-rose)' }}>
-                {result.gapColumns} <span style={{ fontSize: '0.8rem', fontWeight: 400 }}>indels</span>
+                {result.gapPositions} <span style={{ fontSize: '0.75rem', fontWeight: 400 }}>({result.gapRuns} runs)</span>
               </span>
             </div>
           </div>
 
-          {/* Formatted Alignment Block */}
+          {/* Formatted Alignment Output */}
           <div className="glass-panel" style={{ padding: '20px' }}>
             <h3 style={{ fontSize: '0.95rem', fontWeight: 600, margin: '0 0 12px 0' }}>
               Standard Formatted Alignment Matrix
@@ -592,5 +706,3 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
     </div>
   );
 };
-
-  
