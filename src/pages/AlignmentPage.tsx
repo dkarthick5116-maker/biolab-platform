@@ -7,7 +7,6 @@ import {
   RotateCcw, 
   AlertCircle, 
   Settings2, 
-  Sliders, 
   Copy, 
   CheckCircle2 
 } from 'lucide-react';
@@ -28,15 +27,15 @@ interface AlignmentResult {
   full_text: string;
 }
 
-const SAMPLE_DNA_1 = "TACGTCGATCGTAGCTAGCTAGCATC";
-const SAMPLE_DNA_2 = "TACGACGATCGTACGTAGCATC";
+const SAMPLE_DNA_1 = 'TACGTCGATCGTAGCTAGCTAGCATC';
+const SAMPLE_DNA_2 = 'TACGACGATCGTACGTAGCATC';
 
 export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
   const [seq1, setSeq1] = useState(SAMPLE_DNA_1);
   const [seq2, setSeq2] = useState(SAMPLE_DNA_2);
   const [mode, setMode] = useState<'global' | 'local'>('global');
-  
-  // Scoring parameters
+
+  // Scoring configuration state
   const [showConfig, setShowConfig] = useState(false);
   const [matchScore, setMatchScore] = useState<number>(2.0);
   const [mismatchScore, setMismatchScore] = useState<number>(-1.0);
@@ -130,7 +129,7 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
           <div>
             <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0 }}>Pairwise Sequence Alignment</h1>
             <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-              Biopython Bio.Align: Needleman-Wunsch (Global) & Smith-Waterman (Local) algorithms.
+              Biopython Bio.Align: Needleman-Wunsch (Global) &amp; Smith-Waterman (Local) algorithms.
             </p>
           </div>
         </div>
@@ -155,9 +154,9 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
         </div>
       )}
 
-      {/* Sequence Input Grid */}
+      {/* Alignment Input & Parameters */}
       <div className="glass-panel" style={{ padding: '24px', marginBottom: '20px' }}>
-        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <button
             type="button"
             className={mode === 'global' ? 'btn-primary' : 'btn-secondary'}
@@ -184,7 +183,6 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
           </button>
         </div>
 
-        {/* Scoring Matrix Sliders */}
         {showConfig && (
           <div
             style={{
@@ -333,7 +331,6 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
       {/* Results Section */}
       {result && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Summary Metric Cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
             <div className="glass-panel" style={{ padding: '16px', background: 'var(--bg-surface-elevated)' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Alignment Score</span>
@@ -357,7 +354,6 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
             </div>
           </div>
 
-          {/* Formatted Alignment Block */}
           <div className="glass-panel" style={{ padding: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div>
@@ -398,4 +394,3 @@ export const AlignmentPage: React.FC<AlignmentPageProps> = ({ onNavigate }) => {
     </div>
   );
 };
-        
